@@ -1,0 +1,174 @@
+import type {
+  ProductDetail,
+  ProductListItem,
+  ProductVariant,
+  ProductReferenceQuery,
+} from "@/features/products/types";
+import { referencePage } from "@/features/products/api";
+import { apiClient } from "@/lib/api/client";
+import { API_ENDPOINTS } from "@/lib/api/endpoints";
+import type { PaginatedResponse } from "@/types/api";
+
+import type {
+  SellerProductBrand,
+  SellerProductCategory,
+  SellerProductCreateResponse,
+  SellerProductPayload,
+  SellerProductVariantPayload,
+} from "./types";
+
+type ListResponse<T> = T[] | PaginatedResponse<T>;
+
+function normalizeList<T>(data: ListResponse<T>) {
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  return data.results;
+}
+
+export async function getSellerProducts(page = 1, signal?: AbortSignal) {
+  const response = await apiClient.get<ListResponse<ProductListItem>>(
+    API_ENDPOINTS.products.myProducts,
+    { params: { page, page_size: 20 }, signal },
+  );
+
+  return Array.isArray(response.data)
+    ? { count: response.data.length, next: null, previous: null, results: normalizeList(response.data) }
+    : response.data;
+}
+
+export async function getSellerProduct(productId: string) {
+  const response = await apiClient.get<ProductDetail>(
+    `${API_ENDPOINTS.products.products}${productId}/`,
+  );
+
+  return response.data;
+}
+
+export async function getSellerProductOptions(
+  { categoryPage = 1, brandPage = 1 }: ProductReferenceQuery = {},
+  signal?: AbortSignal,
+) {
+  const [categoriesResponse, brandsResponse] = await Promise.all([
+    apiClient.get<ListResponse<SellerProductCategory>>(
+      API_ENDPOINTS.products.categories,
+      { params: { page: categoryPage, page_size: 20 }, signal },
+    ),
+    apiClient.get<ListResponse<SellerProductBrand>>(
+      API_ENDPOINTS.products.brands,
+      { params: { page: brandPage, page_size: 20 }, signal },
+    ),
+  ]);
+
+  return {
+    categories: referencePage(categoriesResponse.data),
+    brands: referencePage(brandsResponse.data),
+  };
+}
+
+export async function createSellerProduct(payload: SellerProductPayload) {
+  const response = await apiClient.post<SellerProductCreateResponse>(
+    API_ENDPOINTS.products.products,
+    payload,
+  );
+
+  return response.data;
+}
+
+export async function updateSellerProduct(
+  productId: string,
+  payload: Partial<SellerProductPayload>,
+) {
+  const response = await apiClient.patch<ProductDetail>(
+    `${API_ENDPOINTS.products.products}${productId}/`,
+    payload,
+  );
+
+  return response.data;
+}
+
+export async function deleteSellerProduct(productId: string) {
+  await apiClient.delete(`${API_ENDPOINTS.products.products}${productId}/`);
+}
+
+export type SellerProductImagePayload = {
+  file: File;
+  alt_text: string;
+  is_main: boolean;
+  order: number;
+};
+
+export async function getSellerProductImages(productId: string) {
+  const product = await getSellerProduct(productId);
+
+  return product.images;
+}
+
+export async function createSellerProductImage(
+  productId: string,
+  payload: SellerProductImagePayload,
+) {
+  const formData = new FormData();
+
+  formData.append("product", productId);
+  formData.append("image", payload.file);
+  formData.append("alt_text", payload.alt_text);
+  formData.append("is_main", String(payload.is_main));
+  formData.append("order", String(payload.order));
+
+  const response = await apiClient.post(
+    API_ENDPOINTS.products.productImages,
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    },
+  );
+
+  return response.data;
+}
+
+export async function deleteSellerProductImage(imageId: number | string) {
+  await apiClient.delete(API_ENDPOINTS.products.productImageDetail(imageId));
+}
+
+export async function getSellerProductVariants(productId: string) {
+  const product = await getSellerProduct(productId);
+
+  return product.variants;
+}
+
+export async function createSellerProductVariant(
+  productId: string,
+  payload: SellerProductVariantPayload,
+) {
+  const response = await apiClient.post<ProductVariant>(
+    API_ENDPOINTS.products.productVariants,
+    {
+      ...payload,
+      product: Number(productId),
+    },
+  );
+
+  return response.data;
+}
+
+export async function updateSellerProductVariant(
+  variantId: number | string,
+  payload: SellerProductVariantPayload,
+) {
+  const response = await apiClient.patch<ProductVariant>(
+    API_ENDPOINTS.products.productVariantDetail(variantId),
+    payload,
+  );
+
+  return response.data;
+}
+
+export async function deleteSellerProductVariant(variantId: number | string) {
+  await apiClient.delete(
+    API_ENDPOINTS.products.productVariantDetail(variantId),
+  );
+}

@@ -1,0 +1,259 @@
+export const API_ENDPOINTS = {
+  home: "/",
+
+  auth: {
+    tokenRefresh: "/api/auth/token/refresh/",
+    logout: "/api/auth/logout/",
+    otpRequest: "/api/auth/otp/request/",
+    otpVerify: "/api/auth/otp/verify/",
+    mfaSetup: "/api/auth/mfa/setup/",
+    mfaComplete: "/api/auth/mfa/complete/",
+    mfaVerify: "/api/auth/mfa/verify/",
+    register: "/api/auth/register/",
+    profile: "/api/auth/profile/",
+    passwordResetRequest: "/api/auth/password-reset/request/",
+    passwordResetVerify: "/api/auth/password-reset/verify/",
+    emailVerifyRequest: "/api/auth/email/verify-request/",
+    emailVerifyConfirm: "/api/auth/email/verify-confirm/",
+    sellerApply: "/api/auth/seller/apply/",
+    sellerStatus: "/api/auth/seller/status/",
+    sellerDashboard: "/api/auth/seller/dashboard/",
+    sellerStore: "/api/auth/seller/store/",
+    addresses: "/api/auth/addresses/",
+    addressDetail: (addressId: number | string) =>
+      `/api/auth/addresses/${addressId}/`,
+    addressSetDefault: (addressId: number | string) =>
+      `/api/auth/addresses/${addressId}/set_default/`,
+    adminSellers: "/api/auth/admin/sellers/",
+    adminPendingSellers: "/api/auth/admin/sellers/pending/",
+    adminSellerDetail: (sellerId: number | string) =>
+      `/api/auth/admin/sellers/${sellerId}/`,
+    adminSellerVerify: (sellerId: number | string) =>
+      `/api/auth/admin/sellers/${sellerId}/verify/`,
+    adminSellerReject: (sellerId: number | string) =>
+      `/api/auth/admin/sellers/${sellerId}/reject/`,
+  },
+
+  rbac: {
+    myPermissions: "/api/rbac/my-permissions/",
+    checkPermission: "/api/rbac/check-permission/",
+    roles: "/api/rbac/roles/",
+    permissions: "/api/rbac/permissions/",
+    userRoles: "/api/rbac/user-roles/",
+  },
+
+  content: {
+    homepage: "/api/content/homepage/",
+    pages: "/api/content/pages/",
+    banners: "/api/content/banners/",
+    announcements: "/api/content/announcements/",
+    navigation: "/api/content/navigation/",
+    faqs: "/api/content/faqs/",
+  },
+
+  products: {
+    categories: "/api/products/categories/",
+    brands: "/api/products/brands/",
+    products: "/api/products/products/",
+    myProducts: "/api/products/products/my_products/",
+    productAddView: (productId: number | string) =>
+      `/api/products/products/${productId}/add_view/`,
+    productRelated: (productId: number | string) =>
+      `/api/products/products/${productId}/related/`,
+    productImages: "/api/products/product-images/",
+    productImageDetail: (imageId: number | string) =>
+      `/api/products/product-images/${imageId}/`,
+    productVariants: "/api/products/product-variants/",
+    productVariantDetail: (variantId: number | string) =>
+      `/api/products/product-variants/${variantId}/`,
+    wishlist: "/api/products/wishlist/",
+    wishlistItem: (wishlistItemId: number | string) =>
+      `/api/products/wishlist/${wishlistItemId}/`,
+    recentlyViewed: "/api/products/recently-viewed/",
+  },
+  inventory: {
+    warehouses: "/api/inventory/warehouses/",
+    activeWarehouses: "/api/inventory/warehouses/active/",
+    myWarehouseAssignments: "/api/inventory/warehouses/my-assignments/",
+    stocks: "/api/inventory/stocks/",
+    lowStock: "/api/inventory/stocks/low-stock/",
+    stockMovements: "/api/inventory/stock-movements/",
+    stockTransfers: "/api/inventory/stock-transfers/",
+
+    stockTransferDetail: (transferId: number | string) =>
+      `/api/inventory/stock-transfers/${transferId}/`,
+
+    stockTransferApprove: (transferId: number | string) =>
+      `/api/inventory/stock-transfers/${transferId}/approve/`,
+
+    stockTransferShip: (transferId: number | string) =>
+      `/api/inventory/stock-transfers/${transferId}/ship/`,
+
+    stockTransferReceive: (transferId: number | string) =>
+      `/api/inventory/stock-transfers/${transferId}/receive/`,
+
+    stockTransferCancel: (transferId: number | string) =>
+      `/api/inventory/stock-transfers/${transferId}/cancel/`,
+  },
+  reviews: {
+    productReviews: "/api/reviews/product-reviews/",
+    productReviewsSummary: "/api/reviews/product-reviews/summary/",
+    productReviewHelpful: (reviewId: number | string) =>
+      `/api/reviews/product-reviews/${reviewId}/helpful/`,
+    productReviewNotHelpful: (reviewId: number | string) =>
+      `/api/reviews/product-reviews/${reviewId}/not-helpful/`,
+  },
+
+  discounts: {
+    validate: "/api/discounts/validate/",
+  },
+
+  payments: {
+    payments: "/api/payments/payments/",
+    paymentDetail: (paymentId: number | string) =>
+      `/api/payments/payments/${paymentId}/`,
+    markSuccess: (paymentId: number | string) =>
+      `/api/payments/payments/${paymentId}/mark-success/`,
+    markFailed: (paymentId: number | string) =>
+      `/api/payments/payments/${paymentId}/mark-failed/`,
+    cancel: (paymentId: number | string) =>
+      `/api/payments/payments/${paymentId}/cancel/`,
+  },
+
+  shipping: {
+    shipments: "/api/shipping/shipments/",
+    eligibleOrders: "/api/shipping/shipments/eligible-orders/",
+    detail: (shipmentId: number | string) =>
+      `/api/shipping/shipments/${shipmentId}/`,
+    markReady: (shipmentId: number | string) =>
+      `/api/shipping/shipments/${shipmentId}/mark-ready/`,
+    markShipped: (shipmentId: number | string) =>
+      `/api/shipping/shipments/${shipmentId}/mark-shipped/`,
+    markDelivered: (shipmentId: number | string) =>
+      `/api/shipping/shipments/${shipmentId}/mark-delivered/`,
+    cancel: (shipmentId: number | string) =>
+      `/api/shipping/shipments/${shipmentId}/cancel/`,
+  },
+
+  returns: {
+    requests: "/api/returns/requests/",
+    detail: (returnId: number | string) => `/api/returns/requests/${returnId}/`,
+    cancel: (returnId: number | string) =>
+      `/api/returns/requests/${returnId}/cancel/`,
+    approve: (returnId: number | string) =>
+      `/api/returns/requests/${returnId}/approve/`,
+    reject: (returnId: number | string) =>
+      `/api/returns/requests/${returnId}/reject/`,
+    markReceived: (returnId: number | string) =>
+      `/api/returns/requests/${returnId}/mark-received/`,
+    markRefunded: (returnId: number | string) =>
+      `/api/returns/requests/${returnId}/mark-refunded/`,
+    sellerRequests: "/api/returns/requests/seller/",
+    sellerDetail: (returnId: number | string) =>
+      `/api/returns/requests/${returnId}/seller-detail/`,
+  },
+
+  sellerOrders: {
+    orders: "/api/orders/orders/seller/",
+    detail: (orderId: number | string) =>
+      `/api/orders/orders/${orderId}/seller-detail/`,
+    updateStatus: (orderId: number | string) =>
+      `/api/orders/orders/${orderId}/seller-status/`,
+  },
+
+  orders: {
+    cart: "/api/orders/cart/",
+    cartAdd: "/api/orders/cart/add/",
+    cartClear: "/api/orders/cart/clear/",
+    cartItem: (itemId: number | string) => `/api/orders/cart/items/${itemId}/`,
+    orders: "/api/orders/orders/",
+    checkout: "/api/orders/orders/checkout/",
+    orderCancel: (orderId: number | string) =>
+      `/api/orders/orders/${orderId}/cancel/`,
+  },
+  notifications: {
+  notifications: "/api/notifications/",
+  detail: (notificationId: number | string) =>
+    `/api/notifications/${notificationId}/`,
+
+  unreadCount: "/api/notifications/unread-count/",
+  summary: "/api/notifications/summary/",
+  preferences: "/api/notifications/preferences/",
+
+  markRead: (notificationId: number | string) =>
+    `/api/notifications/${notificationId}/mark-read/`,
+  markUnread: (notificationId: number | string) =>
+    `/api/notifications/${notificationId}/mark-unread/`,
+
+  markAllRead: "/api/notifications/mark-all-read/",
+  markSelectedRead: "/api/notifications/mark-selected-read/",
+  markSelectedUnread: "/api/notifications/mark-selected-unread/",
+
+  deleteSelected: "/api/notifications/delete-selected/",
+  clearRead: "/api/notifications/clear-read/",
+  clearAll: "/api/notifications/clear-all/",
+},
+  support: {
+    tickets: "/api/support/tickets/",
+
+    ticketDetail: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/`,
+
+    summary: "/api/support/tickets/summary/",
+
+    agents: "/api/support/tickets/agents/",
+
+    attachments: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/attachments/`,
+    attachmentDownload: (ticketId: number | string, attachmentId: number | string) =>
+      `/api/support/tickets/${ticketId}/attachments/${attachmentId}/download/`,
+
+    reply: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/reply/`,
+
+    assign: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/assign/`,
+
+    priority: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/priority/`,
+
+    addTag: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/add-tag/`,
+
+    removeTag: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/remove-tag/`,
+
+    auditLogs: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/audit-logs/`,
+
+    resolve: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/resolve/`,
+
+    close: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/close/`,
+
+    reopen: (ticketId: number | string) =>
+      `/api/support/tickets/${ticketId}/reopen/`,
+
+    tags: "/api/support/tags/",
+
+    tagDetail: (tagId: number | string) =>
+      `/api/support/tags/${tagId}/`,
+  },
+  analytics: {
+    dashboard: "/api/analytics/dashboard/",
+    timeseries: "/api/analytics/timeseries/",
+    breakdown: "/api/analytics/breakdown/",
+    alerts: "/api/analytics/alerts/",
+    export: "/api/analytics/export/",
+  },
+
+  observability: {
+    health: "/api/observability/health/",
+    stats: "/api/observability/stats/",
+    requestLogs: "/api/observability/request-logs/",
+    errorLogs: "/api/observability/error-logs/",
+    auditLogs: "/api/observability/audit-logs/",
+    alerts: "/api/observability/alerts/",
+  },
+} as const;
