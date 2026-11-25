@@ -1,0 +1,428 @@
+from django.contrib.auth import get_user_model
+from django.core.validators import MinValueValidator
+from django.db import models
+from django.db.models import F, Q
+from django.utils.text import slugify
+
+User = get_user_model()
+
+
+class Category(models.Model):
+    """Product categories (hierarchical)"""
+    name = models.CharField(max_length=100, verbose_name="Category Name")
+    slug = models.SlugField(unique=True, verbose_name="Slug")
+    parent = models.ForeignKey(
+        'self', 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True, 
+        related_name='children',
+        verbose_name="Parent Category"
+    )
+    description = models.TextField(blank=True, verbose_name="Description")
+    image = models.ImageField(upload_to='categories/', null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    order = models.IntegerField(default=0, verbose_name="Display Order")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Category"
+        verbose_name_plural = "Categories"
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+
+class Brand(models.Model):
+    """Product brands"""
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(unique=True)
+    logo = models.ImageField(upload_to='brands/', null=True, blank=True)
+    description = models.TextField(blank=True)
+    website = models.URLField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Brand"
+        verbose_name_plural = "Brands"
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+
+class Product(models.Model):
+    """Main product model"""
+    
+    class StatusChoices(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+        DRAFT = 'draft', 'Draft'
+    
+    seller = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name='products',
+        limit_choices_to={'is_seller': True},
+        verbose_name="Seller"
+    )
+    category = models.ForeignKey(
+        Category, 
+        on_delete=models.CASCADE, 
+        related_name='products',
+        verbose_name="Category"
+    )
+    brand = models.ForeignKey(
+        Brand, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='products',
+        verbose_name="Brand"
+    )
+    barcode = models.CharField(
+        max_length=50, 
+        unique=True, 
+        null=True, 
+        blank=True,
+        verbose_name="Barcode",
+        help_text="Product barcode (EAN-13, UPC-A, etc.)"
+    )
+    qr_code = models.ImageField(
+        upload_to='products/qrcodes/',
+        null=True,
+        blank=True,
+        verbose_name="QR Code"
+    )
+    name = models.CharField(max_length=255, verbose_name="Product Name")
+    slug = models.SlugField(unique=True, verbose_name="Slug")
+    description = models.TextField(verbose_name="Description")
+    short_description = models.TextField(max_length=500, blank=True)
+    
+    avrage_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
+    reviews_count = models.PositiveIntegerField(default=0)
+    # Pricing
+    price = models.DecimalField(max_digits=12, decimal_places=0, verbose_name="Price", validators=[MinValueValidator(0)])
+    compare_price = models.DecimalField(
+        max_digits=12, decimal_places=0, 
+        null=True, blank=True, 
+        verbose_name="Compare Price (was...)", validators=[MinValueValidator(0)]
+    )
+    cost_per_item = models.DecimalField(
+        max_digits=12, decimal_places=0, 
+        null=True, blank=True,
+        verbose_name="Cost per item", validators=[MinValueValidator(0)]
+    )
+    
+    # Status
+    status = models.CharField(
+        max_length=20, 
+        choices=StatusChoices.choices, 
+        default=StatusChoices.PENDING,
+        verbose_name="Status"
+    )
+    
+    tags = models.ManyToManyField(
+        'Tag',
+        related_name='products',
+        blank=True,
+        verbose_name="Tags"
+    )
+    is_active = models.BooleanField(default=True, verbose_name="Is Active")
+    is_featured = models.BooleanField(default=False, verbose_name="Featured Product")
+    
+    # Inventory
+    sku = models.CharField(max_length=100, unique=True, verbose_name="SKU")
+    low_stock_threshold = models.PositiveIntegerField(default=5, verbose_name="Low Stock Alert")
+    
+    # Weight & dimensions (for shipping)
+    weight = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    length = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    width = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    height = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    
+    # SEO
+    meta_title = models.CharField(max_length=200, blank=True)
+    meta_description = models.TextField(max_length=500, blank=True)
+    
+    # Timestamps
+    approved_by = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='approved_products',
+        verbose_name="Approved By"
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    views_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class LabelChoices(models.TextChoices):
+        NEW = 'new', 'New'
+        BESTSELLER = 'bestseller', 'Bestseller'
+        DISCOUNTED = 'discounted', 'Discounted'
+        LIMITED = 'limited', 'Limited Edition'
+        PREORDER = 'preorder', 'Pre-order'
+        
+    labels = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name="Product Labels",
+        help_text="List of labels: new, bestseller, discounted, limited, preorder"
+    )
+    
+    class Meta:
+        verbose_name = "Product"
+        verbose_name_plural = "Products"
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['slug']),
+            models.Index(fields=['status', 'is_active']),
+            models.Index(fields=['-created_at']),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=Q(price__gte=0), name="catalog_product_price_nonnegative"),
+            models.CheckConstraint(condition=Q(compare_price__isnull=True) | Q(compare_price__gte=F("price")), name="catalog_product_compare_price_valid"),
+            models.CheckConstraint(condition=Q(cost_per_item__isnull=True) | Q(cost_per_item__gte=0), name="catalog_product_cost_nonnegative"),
+            *[models.CheckConstraint(condition=Q(**{f"{field}__isnull": True}) | Q(**{f"{field}__gte": 0}), name=f"catalog_product_{field}_nonnegative")
+              for field in ("weight", "length", "width", "height")],
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base_slug = slugify(self.name)
+            slug = base_slug
+            counter = 1
+            while Product.objects.filter(slug=slug).exists():
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            self.slug = slug
+        super().save(*args, **kwargs)
+
+    @property
+    def final_price(self):
+        """Current selling price."""
+        return self.price
+
+    @property
+    def total_stock(self):
+        """Total stock across all warehouses."""
+        if hasattr(self, "_catalog_stock"):
+            return self._catalog_stock
+        result = self.stock_items.aggregate(total=models.Sum("quantity"))
+        return result["total"] or 0
+
+
+    @property
+    def reserved_stock(self):
+        """Total reserved stock across all warehouses."""
+        if hasattr(self, "_catalog_reserved"):
+            return self._catalog_reserved
+        result = self.stock_items.aggregate(total=models.Sum("reserved_quantity"))
+        return result["total"] or 0
+
+
+    @property
+    def available_stock(self):
+        """Unreserved stock in active warehouses eligible for checkout."""
+        if hasattr(self, "_catalog_available"):
+            return self._catalog_available
+        result = self.stock_items.filter(warehouse__is_active=True).aggregate(
+            total=models.Sum(models.F("quantity") - models.F("reserved_quantity")),
+        )
+        return result["total"] or 0
+
+
+    @property
+    def stock(self):
+        """
+        Backward-compatible stock value.
+        Old product APIs still return `stock`,
+        but the value now comes from inventory.Stock.
+        """
+        return self.total_stock
+
+
+    @property
+    def is_in_stock(self):
+        return self.available_stock > 0
+
+
+class ProductImage(models.Model):
+    """Product images gallery"""
+    product = models.ForeignKey(
+        Product, 
+        on_delete=models.CASCADE, 
+        related_name='images',
+        verbose_name="Product"
+    )
+    image = models.ImageField(upload_to='products/', verbose_name="Image")
+    alt_text = models.CharField(max_length=255, blank=True, verbose_name="Alt Text")
+    is_main = models.BooleanField(default=False, verbose_name="Main Image")
+    order = models.IntegerField(default=0, verbose_name="Display Order")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Product Image"
+        verbose_name_plural = "Product Images"
+        ordering = ['order']
+        constraints = [models.UniqueConstraint(fields=["product"], condition=Q(is_main=True), name="catalog_one_main_image")]
+
+    def __str__(self):
+        return f"{self.product.name} - Image {self.order}"
+
+
+class ProductVariant(models.Model):
+    """Product variants (size, color, etc.)"""
+    product = models.ForeignKey(
+        Product, 
+        on_delete=models.CASCADE, 
+        related_name='variants',
+        verbose_name="Product"
+    )
+    name = models.CharField(max_length=100, verbose_name="Variant Name (e.g., Red, XL)")
+    sku = models.CharField(max_length=100, unique=True, verbose_name="SKU")
+    price = models.DecimalField(max_digits=12, decimal_places=0, verbose_name="Price", validators=[MinValueValidator(0)])
+    compare_price = models.DecimalField(max_digits=12, decimal_places=0, null=True, blank=True, validators=[MinValueValidator(0)])
+    stock = models.PositiveIntegerField(default=0, verbose_name="Stock")
+    is_default = models.BooleanField(default=False, verbose_name="Default Variant")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Product Variant"
+        verbose_name_plural = "Product Variants"
+        unique_together = ['product', 'sku']
+        constraints = [
+            models.CheckConstraint(condition=Q(price__gte=0), name="catalog_variant_price_nonnegative"),
+            models.CheckConstraint(condition=Q(compare_price__isnull=True) | Q(compare_price__gte=F("price")), name="catalog_variant_compare_price_valid"),
+            models.UniqueConstraint(fields=["product"], condition=Q(is_default=True), name="catalog_one_default_variant"),
+        ]
+
+    def __str__(self):
+        return f"{self.product.name} - {self.name}"
+    
+    @property
+    def final_price(self):
+        """Get final price (with discount if any)"""
+        return self.price
+
+
+class Attribute(models.Model):
+    """Product attributes (e.g., RAM, Processor, Color)"""
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(unique=True)
+    is_filterable = models.BooleanField(default=True, help_text="Can be used for filtering")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Attribute"
+        verbose_name_plural = "Attributes"
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+
+class AttributeValue(models.Model):
+    """Attribute values (e.g., 8GB, 16GB, Red, Blue)"""
+    attribute = models.ForeignKey(Attribute, on_delete=models.CASCADE, related_name='values')
+    value = models.CharField(max_length=100)
+    slug = models.SlugField()
+
+    class Meta:
+        verbose_name = "Attribute Value"
+        verbose_name_plural = "Attribute Values"
+        unique_together = ['attribute', 'value']
+        ordering = ['value']
+
+    def __str__(self):
+        return f"{self.attribute.name}: {self.value}"
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.value)
+        super().save(*args, **kwargs)
+
+
+class ProductAttribute(models.Model):
+    """Product attributes mapping"""
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_attributes')
+    attribute_value = models.ForeignKey(AttributeValue, on_delete=models.CASCADE)
+    extra_value = models.CharField(max_length=255, blank=True, help_text="For custom values")
+
+    class Meta:
+        verbose_name = "Product Attribute"
+        verbose_name_plural = "Product Attributes"
+        unique_together = ['product', 'attribute_value']
+
+    def __str__(self):
+        return f"{self.product.name} - {self.attribute_value}"
+
+
+class Tag(models.Model):
+    """Product tags for better search"""
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tag"
+        verbose_name_plural = "Tags"
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+
+class Wishlist(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='wishlist')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='wishlisted_by')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user', 'product']
+        ordering = ['-created_at']
+        
+        
+class RecentlyViewed(models.Model):
+    """Products recently viewed by users"""
+    user = models.ForeignKey(User,on_delete=models.CASCADE, related_name="recently_viewed")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="viewed_by")
+    viewed_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-viewed_at']
+        unique_together = ['user', 'product']
+        
+    def __str__(self):
+        identifier = self.user.email or self.user.full_name or str(self.user_id)
+        return f"{identifier} viewed {self.product.name}"

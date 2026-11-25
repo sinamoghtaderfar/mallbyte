@@ -1,0 +1,373 @@
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.urls import reverse
+from django.utils import timezone
+from rest_framework import serializers
+
+from apps.support.attachment_validation import validate_support_attachment
+from apps.support.models import (
+    SupportTag,
+    SupportTicket,
+    TicketAttachment,
+    TicketAuditLog,
+    TicketMessage,
+)
+from apps.support.notifications import create_support_notification
+from apps.support.permissions import (
+    ADD_SUPPORT_INTERNAL_NOTE,
+    REPLY_SUPPORT_TICKETS,
+    VIEW_SUPPORT_INTERNAL_NOTES,
+    can_be_assigned_support_ticket,
+    has_support_permission,
+    is_support_staff,
+)
+
+User = get_user_model()
+
+
+class SupportTagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SupportTag
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "color",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "slug",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class TicketAttachmentSerializer(serializers.ModelSerializer):
+    file = serializers.FileField(write_only=True, validators=[validate_support_attachment])
+    download_url = serializers.SerializerMethodField()
+
+    def get_download_url(self, obj):
+        return reverse("support-ticket-download-attachment", args=[obj.ticket_id, obj.pk])
+
+    uploaded_by_display = serializers.CharField(
+        source="uploaded_by.full_name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = TicketAttachment
+        fields = [
+            "id",
+            "ticket",
+            "message",
+            "uploaded_by",
+            "uploaded_by_display",
+            "file",
+            "download_url",
+            "original_filename",
+            "content_type",
+            "size",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "ticket",
+            "message",
+            "uploaded_by",
+            "uploaded_by_display",
+            "original_filename",
+            "content_type",
+            "size",
+            "created_at",
+            "download_url",
+        ]
+
+
+class TicketAuditLogSerializer(serializers.ModelSerializer):
+    actor_display = serializers.CharField(
+        source="actor.full_name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = TicketAuditLog
+        fields = [
+            "id",
+            "ticket",
+            "actor",
+            "actor_display",
+            "action",
+            "description",
+            "metadata",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class TicketTagSerializer(serializers.Serializer):
+    tag = serializers.PrimaryKeyRelatedField(
+        queryset=SupportTag.objects.filter(is_active=True)
+    )
+
+
+class TicketMessageSerializer(serializers.ModelSerializer):
+    sender_display = serializers.CharField(
+        source="sender.full_name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = TicketMessage
+        fields = [
+            "id",
+            "ticket",
+            "sender",
+            "sender_display",
+            "message",
+            "is_internal_note",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "ticket",
+            "sender",
+            "sender_display",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class SupportTicketSerializer(serializers.ModelSerializer):
+    customer_display = serializers.CharField(
+        source="customer.full_name",
+        read_only=True,
+    )
+
+    assigned_to_display = serializers.CharField(
+        source="assigned_to.full_name",
+        read_only=True,
+    )
+
+    messages = serializers.SerializerMethodField()
+
+    initial_message = serializers.CharField(
+        write_only=True,
+        required=True,
+    )
+
+    tags_detail = SupportTagSerializer(
+        source="tags",
+        many=True,
+        read_only=True,
+    )
+
+    attachments = serializers.SerializerMethodField()
+    messages_truncated = serializers.SerializerMethodField()
+    attachments_truncated = serializers.SerializerMethodField()
+
+    def get_attachments(self, obj):
+        attachments = getattr(obj, "visible_attachments", None)
+        if attachments is None:
+            attachments = list(obj.attachments.select_related("uploaded_by").all()[:51])
+        return TicketAttachmentSerializer(attachments[:50], many=True, context=self.context).data
+
+    def get_messages_truncated(self, obj):
+        return len(getattr(obj, "visible_messages", [])) > 50
+
+    def get_attachments_truncated(self, obj):
+        return len(getattr(obj, "visible_attachments", [])) > 50
+
+    class Meta:
+        model = SupportTicket
+        fields = [
+            "id",
+            "ticket_number",
+            "customer",
+            "customer_display",
+            "assigned_to",
+            "assigned_to_display",
+            "subject",
+            "category",
+            "priority",
+            "status",
+            "order",
+            "product",
+            "return_request",
+            "last_message_at",
+            "resolved_at",
+            "closed_at",
+            "messages",
+            "messages_truncated",
+            "attachments_truncated",
+            "initial_message",
+            "created_at",
+            "updated_at",
+            "tags",
+            "tags_detail",
+            "attachments",
+        ]
+
+        read_only_fields = [
+            "id",
+            "ticket_number",
+            "customer",
+            "customer_display",
+            "assigned_to",
+            "assigned_to_display",
+            "priority",
+            "status",
+            "last_message_at",
+            "resolved_at",
+            "closed_at",
+            "messages",
+            "created_at",
+            "updated_at",
+            "tags",
+            "tags_detail",
+            "attachments",
+        ]
+
+    def get_messages(self, obj):
+        messages = getattr(obj, "visible_messages", None)
+        if messages is None:
+            messages = obj.messages.select_related("sender").order_by("-created_at", "-pk")
+            request = self.context.get("request")
+            if not request or not has_support_permission(request.user, VIEW_SUPPORT_INTERNAL_NOTES):
+                messages = messages.filter(is_internal_note=False)
+            messages = list(messages[:51])
+        return TicketMessageSerializer(list(reversed(messages[:50])), many=True).data
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+
+        if request is None or request.user.is_anonymous:
+            raise serializers.ValidationError("Authentication is required.")
+
+        order = attrs.get("order")
+        return_request = attrs.get("return_request")
+
+        if (
+            order
+            and not is_support_staff(request.user)
+            and order.user_id != request.user.id
+        ):
+            raise serializers.ValidationError(
+                "You can only create tickets " "for your own orders."
+            )
+
+        if (
+            return_request
+            and not is_support_staff(request.user)
+            and return_request.customer_id != request.user.id
+        ):
+            raise serializers.ValidationError(
+                "You can only create tickets " "for your own return requests."
+            )
+
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        request = self.context["request"]
+
+        initial_message = validated_data.pop("initial_message")
+
+        ticket = SupportTicket.objects.create(
+            customer=request.user,
+            last_message_at=timezone.now(),
+            **validated_data,
+        )
+
+        TicketMessage.objects.create(
+            ticket=ticket,
+            sender=request.user,
+            message=initial_message,
+        )
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.CREATED),
+            description="Support ticket created.",
+        )
+
+        create_support_notification(
+            user=ticket.customer,
+            ticket=ticket,
+            template_key="support_ticket_created",
+            ticket_number=ticket.ticket_number,
+        )
+
+        return ticket
+
+
+class TicketReplySerializer(serializers.Serializer):
+    message = serializers.CharField()
+
+    is_internal_note = serializers.BooleanField(
+        required=False,
+        default=False,
+    )
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        ticket = self.context.get("ticket")
+
+        if request is None or not request.user.is_authenticated:
+            raise serializers.ValidationError("Authentication is required.")
+
+        is_internal_note = attrs.get(
+            "is_internal_note",
+            False,
+        )
+
+        if is_internal_note:
+            if not has_support_permission(
+                request.user,
+                ADD_SUPPORT_INTERNAL_NOTE,
+            ):
+                raise serializers.ValidationError(
+                    "You do not have permission " "to create internal notes."
+                )
+
+            return attrs
+
+        is_customer_reply = bool(ticket and ticket.customer_id == request.user.id)
+
+        if not is_customer_reply and not has_support_permission(
+            request.user,
+            REPLY_SUPPORT_TICKETS,
+        ):
+            raise serializers.ValidationError(
+                "You do not have permission " "to reply to this ticket."
+            )
+
+        return attrs
+
+
+class TicketAssignSerializer(serializers.Serializer):
+    assigned_to = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True)
+    )
+
+    def validate_assigned_to(self, user):
+        if not can_be_assigned_support_ticket(user):
+            raise serializers.ValidationError(
+                "Assigned user must have support " "ticket view and reply permissions."
+            )
+
+        return user
+
+
+class TicketPrioritySerializer(serializers.Serializer):
+    priority = serializers.ChoiceField(choices=SupportTicket.PriorityChoices.choices)
+
+
+class SupportAgentSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    email = serializers.EmailField()
+    full_name = serializers.CharField()

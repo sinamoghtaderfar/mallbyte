@@ -1,0 +1,449 @@
+import uuid
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
+from django.db.models import Q
+from django.utils import timezone
+
+from apps.inventory.models import Stock, StockMovement
+from apps.orders.models import (
+    Order,
+    OrderStatusHistory,
+    SellerOrderFulfillment,
+    SellerOrderFulfillmentHistory,
+)
+
+
+class Payment(models.Model):
+    """
+    Payment record for one order.
+
+    One order can have multiple payment attempts.
+    Example:
+    - first payment failed
+    - second payment succeeded
+    """
+
+    class ProviderChoices(models.TextChoices):
+        MOCK = "mock", "Mock Payment"
+        CASH_ON_DELIVERY = "cash_on_delivery", "Cash on Delivery"
+        ZARINPAL = "zarinpal", "Zarinpal"
+        STRIPE = "stripe", "Stripe"
+
+    class StatusChoices(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+        REFUNDED = "refunded", "Refunded"
+
+    payment_number = models.CharField(
+        max_length=40,
+        unique=True,
+        editable=False,
+    )
+
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.PROTECT,
+        related_name="payments",
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="payments",
+    )
+
+    provider = models.CharField(
+        max_length=30,
+        choices=ProviderChoices.choices,
+        default=ProviderChoices.MOCK,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=StatusChoices.choices,
+        default=StatusChoices.PENDING,
+    )
+
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+    )
+
+    currency = models.CharField(
+        max_length=10,
+        default="IRR",
+    )
+
+    # ID returned by external payment gateway.
+    # Example: Stripe payment intent id, Zarinpal authority, etc.
+    gateway_reference = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    # Extra raw data from gateway.
+    gateway_response = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    failure_reason = models.TextField(blank=True)
+
+    paid_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    refunded_at = models.DateTimeField(null=True, blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_payments",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Payment"
+        verbose_name_plural = "Payments"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["payment_number"]),
+            models.Index(fields=["order", "-created_at"]),
+            models.Index(fields=["user", "-created_at"]),
+            models.Index(fields=["provider"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["-created_at"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(amount__gt=0),
+                name="payment_amount_positive",
+            ),
+            models.UniqueConstraint(
+                fields=["order"],
+                condition=Q(status="success"),
+                name="unique_successful_payment_per_order",
+            ),
+            models.UniqueConstraint(
+                fields=["provider", "gateway_reference"],
+                condition=Q(
+                    status__in=("success", "refunded"),
+                    gateway_reference__gt="",
+                ),
+                name="unique_provider_verified_capture_reference",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.payment_number} - {self.status}"
+
+    def save(self, *args, **kwargs):
+        if not self.payment_number:
+            self.payment_number = self.generate_payment_number()
+
+        super().save(*args, **kwargs)
+
+    @staticmethod
+    def generate_payment_number():
+        """
+        Generate readable payment number.
+        Example: PAY-20260514-A1B2C3
+        """
+        today = timezone.now().strftime("%Y%m%d")
+        random_code = uuid.uuid4().hex[:6].upper()
+        return f"PAY-{today}-{random_code}"
+
+    def mark_success(self, gateway_reference="", gateway_response=None, confirmed_at=None):
+        """Complete a pending payment exactly once per order."""
+
+        if gateway_response is None:
+            gateway_response = {}
+
+        with transaction.atomic():
+            # Always lock the order first. Cancellation and payment
+            # creation must use the same lock order.
+            order = Order.objects.select_for_update().get(pk=self.order_id)
+            payment = Payment.objects.select_for_update().get(pk=self.pk)
+
+            if payment.status != self.StatusChoices.PENDING:
+                raise ValidationError("Only pending payments can be completed.")
+
+            if (
+                order.status != Order.StatusChoices.PENDING_PAYMENT
+                or order.payment_status
+                not in {
+                    Order.PaymentStatusChoices.UNPAID,
+                    Order.PaymentStatusChoices.FAILED,
+                }
+            ):
+                raise ValidationError("This order is no longer awaiting payment.")
+
+            if (
+                Payment.objects.filter(
+                    order=order,
+                    status=self.StatusChoices.SUCCESS,
+                )
+                .exclude(pk=payment.pk)
+                .exists()
+            ):
+                raise ValidationError("This order already has a successful payment.")
+
+            if payment.amount != order.total_amount:
+                raise ValidationError("Payment amount does not match the order total.")
+
+            if order.reservation_expires_at and order.reservation_expires_at <= timezone.now():
+                raise ValidationError("The order stock reservation has expired. Please check out again.")
+
+            old_order_status = order.status
+
+            for item in order.items.select_related("product", "warehouse").order_by("product_id", "warehouse_id", "pk"):
+                if not item.warehouse_id:
+                    raise ValidationError("The order item has no assigned warehouse.")
+
+                stock = Stock.objects.select_for_update().get(
+                    product=item.product,
+                    warehouse=item.warehouse,
+                )
+
+                stock.release_reservation(
+                    quantity=item.quantity,
+                    user=payment.user,
+                )
+
+                StockMovement.objects.create(
+                    product=item.product,
+                    warehouse=item.warehouse,
+                    movement_type=StockMovement.MovementType.SALE,
+                    quantity=-item.quantity,
+                    reference_id=f"payment:{payment.pk}",
+                    reason=f"Order paid: {order.order_number}",
+                    created_by=payment.user,
+                    notes=f"Payment success: {payment.payment_number}",
+                )
+
+            now = confirmed_at or timezone.now()
+            if timezone.is_naive(now):
+                raise ValidationError("Capture timestamp must be timezone-aware.")
+
+            payment.status = self.StatusChoices.SUCCESS
+            payment.gateway_reference = gateway_reference
+            payment.gateway_response = gateway_response
+            payment.paid_at = now
+            payment.save(
+                update_fields=[
+                    "status",
+                    "gateway_reference",
+                    "gateway_response",
+                    "paid_at",
+                    "updated_at",
+                ]
+            )
+
+            order.mark_paid(paid_at=now)
+
+            if getattr(settings, "SETTLEMENTS_LEDGER_ENABLED", False):
+                from apps.settlements.services import post_captured_payment
+
+                post_captured_payment(payment)
+
+            # Record independent fulfillment for each seller in this order.
+            seller_ids = order.items.values_list(
+                "product__seller_id", flat=True
+            ).distinct()
+
+            for seller_id in seller_ids:
+                (
+                    fulfillment,
+                    _created,
+                ) = SellerOrderFulfillment.objects.select_for_update().get_or_create(
+                    order=order,
+                    seller_id=seller_id,
+                    defaults={
+                        "status": Order.StatusChoices.PENDING_PAYMENT,
+                    },
+                )
+
+                if fulfillment.status == Order.StatusChoices.PENDING_PAYMENT:
+                    old_status = fulfillment.status
+                    fulfillment.status = Order.StatusChoices.PAID
+                    fulfillment.save(update_fields=["status", "updated_at"])
+
+                    SellerOrderFulfillmentHistory.objects.create(
+                        fulfillment=fulfillment,
+                        old_status=old_status,
+                        new_status=fulfillment.status,
+                        changed_by=payment.user,
+                        note=f"Payment completed: {payment.payment_number}",
+                    )
+
+            OrderStatusHistory.objects.create(
+                order=order,
+                old_status=old_order_status,
+                new_status=order.status,
+                changed_by=payment.user,
+                note=f"Payment completed: {payment.payment_number}",
+            )
+
+            # Other unfinished attempts must not remain payable.
+            other_attempts = (
+                Payment.objects.select_for_update()
+                .filter(
+                    order=order,
+                    status=self.StatusChoices.PENDING,
+                )
+                .exclude(pk=payment.pk)
+            )
+
+            for other in other_attempts:
+                other.status = self.StatusChoices.CANCELLED
+                other.cancelled_at = now
+                other.failure_reason = "Another payment attempt completed this order."
+                other.save(
+                    update_fields=[
+                        "status",
+                        "cancelled_at",
+                        "failure_reason",
+                        "updated_at",
+                    ]
+                )
+
+                PaymentEvent.objects.create(
+                    payment=other,
+                    event_type="payment_cancelled",
+                    old_status=self.StatusChoices.PENDING,
+                    new_status=self.StatusChoices.CANCELLED,
+                    message=other.failure_reason,
+                    data={"successful_payment_id": payment.pk},
+                )
+
+            self.status = payment.status
+            self.gateway_reference = payment.gateway_reference
+            self.gateway_response = payment.gateway_response
+            self.paid_at = payment.paid_at
+
+        return self
+
+    def mark_failed(self, reason="", gateway_response=None):
+        """
+        Mark payment as failed.
+        Reserved stock stays reserved for now.
+        User can try payment again.
+        """
+
+        if gateway_response is None:
+            gateway_response = {}
+
+        with transaction.atomic():
+            payment = Payment.objects.select_for_update().get(pk=self.pk)
+
+            if payment.status != self.StatusChoices.PENDING:
+                raise ValidationError("Only pending payments can be marked as failed.")
+
+            payment.status = self.StatusChoices.FAILED
+            payment.failure_reason = reason
+            payment.gateway_response = gateway_response
+            payment.failed_at = timezone.now()
+            payment.save(
+                update_fields=[
+                    "status",
+                    "failure_reason",
+                    "gateway_response",
+                    "failed_at",
+                    "updated_at",
+                ]
+            )
+
+            self.status = payment.status
+            self.failure_reason = payment.failure_reason
+            self.failed_at = payment.failed_at
+
+        return self
+
+    def cancel(self, reason=""):
+        """
+        Cancel a pending or failed payment attempt.
+
+        This does not cancel the order.
+        Order cancellation is handled in orders app.
+        """
+
+        with transaction.atomic():
+            payment = Payment.objects.select_for_update().get(pk=self.pk)
+
+            if payment.status not in {
+                self.StatusChoices.PENDING,
+                self.StatusChoices.FAILED,
+            }:
+                raise ValidationError(
+                    "Only pending or failed payments can be cancelled."
+                )
+
+            payment.status = self.StatusChoices.CANCELLED
+            payment.failure_reason = reason
+            payment.cancelled_at = timezone.now()
+            payment.save(
+                update_fields=[
+                    "status",
+                    "failure_reason",
+                    "cancelled_at",
+                    "updated_at",
+                ]
+            )
+
+            self.status = payment.status
+            self.failure_reason = payment.failure_reason
+            self.cancelled_at = payment.cancelled_at
+
+        return self
+
+
+class PaymentEvent(models.Model):
+    """
+    History/log of payment changes.
+
+    Useful for debugging gateway callbacks.
+    """
+
+    payment = models.ForeignKey(
+        Payment,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+
+    event_type = models.CharField(max_length=50)
+
+    old_status = models.CharField(max_length=20, blank=True)
+    new_status = models.CharField(max_length=20)
+
+    message = models.TextField(blank=True)
+    data = models.JSONField(default=dict, blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payment_events",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Payment Event"
+        verbose_name_plural = "Payment Events"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["payment", "-created_at"]),
+            models.Index(fields=["event_type"]),
+            models.Index(fields=["new_status"]),
+        ]
+
+    def __str__(self):
+        return f"{self.payment.payment_number}: {self.event_type}"

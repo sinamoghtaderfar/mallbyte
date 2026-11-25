@@ -1,0 +1,137 @@
+from django.db import transaction
+from rest_framework import serializers
+
+from apps.orders.models import Order, OrderItem
+from apps.reviews.models import ProductReview
+from apps.reviews.notifications import create_review_notification
+from apps.reviews.services import update_product_review_stats
+
+
+class ProductReviewSerializer(serializers.ModelSerializer):
+    customer_display = serializers.CharField(
+        source="customer.full_name", read_only=True
+    )
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    approved_by_display = serializers.CharField(
+        source="approved_by.full_name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = ProductReview
+        fields = [
+            "id",
+            "customer",
+            "customer_display",
+            "product",
+            "product_name",
+            "order_item",
+            "rating",
+            "title",
+            "comment",
+            "status",
+            "is_verified_purchase",
+            "approved_by",
+            "approved_by_display",
+            "approved_at",
+            "rejected_reason",
+            "helpful_count",
+            "not_helpful_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "customer",
+            "customer_display",
+            "product_name",
+            "order_item",
+            "status",
+            "is_verified_purchase",
+            "approved_by",
+            "approved_by_display",
+            "approved_at",
+            "rejected_reason",
+            "helpful_count",
+            "not_helpful_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+
+        if request is None or request.user.is_anonymous:
+            raise serializers.ValidationError(
+                "Authentication is required to create a review."
+            )
+
+        product = attrs.get("product")
+
+        if self.instance:
+            if product and product.pk != self.instance.product_id:
+                raise serializers.ValidationError({"product": "A review cannot be moved to another product."})
+            return attrs
+
+        if product is None:
+            return attrs
+
+        if ProductReview.objects.filter(
+            customer=request.user,
+            product=product,
+        ).exists():
+            raise serializers.ValidationError("You have already reviewed this product.")
+
+        order_item = (
+            OrderItem.objects.filter(
+                order__user=request.user,
+                order__status=Order.StatusChoices.DELIVERED,
+                product=product,
+            )
+            .select_related("order", "product")
+            .order_by("-created_at")
+            .first()
+        )
+
+        if order_item is None:
+            raise serializers.ValidationError(
+                "You can only review products from delivered orders."
+            )
+
+        attrs["order_item"] = order_item
+        attrs["is_verified_purchase"] = True
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+
+        review = ProductReview.objects.create(
+            customer=request.user,
+            status=ProductReview.StatusChoices.PENDING,
+            **validated_data,
+        )
+
+        create_review_notification(
+            review=review,
+            template_key="review_submitted",
+            product_name=review.product.name,
+        )
+
+        return review
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        instance = ProductReview.objects.select_for_update().get(pk=instance.pk)
+        changed = any(field in validated_data and validated_data[field] != getattr(instance, field)
+                      for field in ("rating", "title", "comment"))
+        if changed:
+            validated_data.update(status=ProductReview.StatusChoices.PENDING, approved_by=None, approved_at=None, rejected_reason="")
+        review = super().update(instance, validated_data)
+        if changed:
+            update_product_review_stats(review.product)
+        return review
+
+
+class ProductReviewModerationSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True)

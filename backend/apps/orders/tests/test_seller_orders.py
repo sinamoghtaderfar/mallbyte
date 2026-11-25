@@ -1,0 +1,369 @@
+from decimal import Decimal
+
+from django.contrib.auth import get_user_model
+from rest_framework import status
+from rest_framework.test import APITestCase
+
+from apps.orders.models import (
+    Order,
+    OrderItem,
+    OrderStatusHistory,
+    SellerOrderFulfillment,
+)
+from apps.products.models import Brand, Category, Product
+
+User = get_user_model()
+
+
+class SellerOrderAPITests(APITestCase):
+    def setUp(self):
+        self.customer = User.objects.create_user(
+            email="customer@example.com",
+            password="pass12345",
+        )
+        self.seller = User.objects.create_user(
+            email="seller@example.com",
+            password="pass12345",
+            is_seller=True,
+        )
+        self.other_seller = User.objects.create_user(
+            email="other-seller@example.com",
+            password="pass12345",
+            is_seller=True,
+        )
+
+        self.category = Category.objects.create(
+            name="Electronics",
+            slug="electronics",
+        )
+        self.brand = Brand.objects.create(
+            name="MallByte",
+            slug="mallbyte",
+        )
+
+        self.seller_product = Product.objects.create(
+            seller=self.seller,
+            category=self.category,
+            brand=self.brand,
+            name="Seller Product",
+            slug="seller-product",
+            description="Seller product description",
+            price=Decimal("1000"),
+            sku="SELLER-001",
+            status=Product.StatusChoices.APPROVED,
+            is_active=True,
+        )
+        self.other_product = Product.objects.create(
+            seller=self.other_seller,
+            category=self.category,
+            brand=self.brand,
+            name="Other Seller Product",
+            slug="other-seller-product",
+            description="Other seller product description",
+            price=Decimal("2000"),
+            sku="OTHER-001",
+            status=Product.StatusChoices.APPROVED,
+            is_active=True,
+        )
+
+    def create_order(
+        self,
+        status_value=Order.StatusChoices.PAID,
+        payment_status=Order.PaymentStatusChoices.PAID,
+    ):
+        order = Order.objects.create(
+            user=self.customer,
+            status=status_value,
+            payment_status=payment_status,
+            subtotal=Decimal("3000"),
+            discount_amount=Decimal("0"),
+            shipping_cost=Decimal("0"),
+            tax_amount=Decimal("0"),
+            receiver_name="Sina Moghtader Far",
+            receiver_phone="+49123456789",
+            province="Bavaria",
+            city="Bamberg",
+            address="Example street 1",
+            postal_code="96047",
+            customer_note="Please deliver carefully.",
+        )
+
+        OrderItem.objects.create(
+            order=order,
+            product=self.seller_product,
+            product_name=self.seller_product.name,
+            product_sku=self.seller_product.sku,
+            quantity=1,
+            unit_price=Decimal("1000"),
+            total_price=Decimal("1000"),
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=self.other_product,
+            product_name=self.other_product.name,
+            product_sku=self.other_product.sku,
+            quantity=1,
+            unit_price=Decimal("2000"),
+            total_price=Decimal("2000"),
+        )
+
+        return order
+
+    def test_seller_can_list_orders_that_include_own_products(self):
+        order = self.create_order()
+
+        other_order = Order.objects.create(
+            user=self.customer,
+            status=Order.StatusChoices.PAID,
+            payment_status=Order.PaymentStatusChoices.PAID,
+            subtotal=Decimal("2000"),
+            receiver_name="Customer",
+            receiver_phone="+49123456789",
+            province="Bavaria",
+            city="Bamberg",
+            address="Other street 1",
+            postal_code="96047",
+        )
+        OrderItem.objects.create(
+            order=other_order,
+            product=self.other_product,
+            product_name=self.other_product.name,
+            product_sku=self.other_product.sku,
+            quantity=1,
+            unit_price=Decimal("2000"),
+            total_price=Decimal("2000"),
+        )
+
+        self.client.force_authenticate(user=self.seller)
+
+        response = self.client.get("/api/orders/orders/seller/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["id"], order.id)
+        self.assertEqual(response.data["results"][0]["seller_items_count"], 1)
+        self.assertEqual(
+            Decimal(str(response.data["results"][0]["seller_total_amount"])), Decimal("1000")
+        )
+
+    def test_seller_detail_only_returns_own_items(self):
+        order = self.create_order()
+
+        self.client.force_authenticate(user=self.seller)
+
+        response = self.client.get(f"/api/orders/orders/{order.id}/seller-detail/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], order.id)
+        self.assertEqual(response.data["seller_items_count"], 1)
+        self.assertEqual(len(response.data["items"]), 1)
+        self.assertEqual(response.data["items"][0]["product"], self.seller_product.id)
+
+    def test_non_seller_cannot_access_seller_orders(self):
+        self.client.force_authenticate(user=self.customer)
+
+        response = self.client.get("/api/orders/orders/seller/")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_seller_can_move_own_fulfillment_to_processing(self):
+        order = self.create_order()
+
+        seller_fulfillment = SellerOrderFulfillment.objects.create(
+            order=order,
+            seller=self.seller,
+            status=Order.StatusChoices.PAID,
+        )
+
+        other_fulfillment = SellerOrderFulfillment.objects.create(
+            order=order,
+            seller=self.other_seller,
+            status=Order.StatusChoices.PAID,
+        )
+
+        self.client.force_authenticate(user=self.seller)
+
+        response = self.client.post(
+            f"/api/orders/orders/{order.id}/seller-status/",
+            {
+                "status": Order.StatusChoices.PROCESSING,
+                "note": "Seller started preparing their items.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            response.data,
+        )
+
+        seller_fulfillment.refresh_from_db()
+        other_fulfillment.refresh_from_db()
+        order.refresh_from_db()
+
+        self.assertEqual(
+            seller_fulfillment.status,
+            Order.StatusChoices.PROCESSING,
+        )
+
+        self.assertEqual(
+            other_fulfillment.status,
+            Order.StatusChoices.PAID,
+        )
+
+        self.assertEqual(order.status, Order.StatusChoices.PROCESSING)
+        self.assertEqual(
+            OrderStatusHistory.objects.filter(
+                order=order,
+                old_status=Order.StatusChoices.PAID,
+                new_status=Order.StatusChoices.PROCESSING,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            response.data["seller_status"],
+            Order.StatusChoices.PROCESSING,
+        )
+        self.assertEqual(response.data["status"], Order.StatusChoices.PROCESSING)
+
+    def test_second_seller_preparation_does_not_duplicate_history(self):
+        order = self.create_order()
+        for seller in (self.seller, self.other_seller):
+            SellerOrderFulfillment.objects.create(
+                order=order, seller=seller, status=Order.StatusChoices.PAID,
+            )
+            self.client.force_authenticate(user=seller)
+            response = self.client.post(
+                f"/api/orders/orders/{order.id}/seller-status/",
+                {"status": Order.StatusChoices.PROCESSING},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.StatusChoices.PROCESSING)
+        self.assertEqual(
+            OrderStatusHistory.objects.filter(
+                order=order,
+                old_status=Order.StatusChoices.PAID,
+                new_status=Order.StatusChoices.PROCESSING,
+            ).count(),
+            1,
+        )
+
+    def test_historical_paid_orders_backfill_missing_seller_rows(self):
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
+
+        order = self.create_order()
+        self.assertFalse(SellerOrderFulfillment.objects.filter(order=order).exists())
+        migration = import_module(
+            "apps.orders.migrations.0003_backfill_seller_fulfillments"
+        )
+        migration.backfill_missing_seller_fulfillments(django_apps, None)
+        expected = {
+            (self.seller.pk, Order.StatusChoices.PAID),
+            (self.other_seller.pk, Order.StatusChoices.PAID),
+        }
+        self.assertEqual(
+            set(SellerOrderFulfillment.objects.filter(order=order)
+                .values_list("seller_id", "status")),
+            expected,
+        )
+        migration.backfill_missing_seller_fulfillments(django_apps, None)
+        self.assertEqual(
+            SellerOrderFulfillment.objects.filter(order=order).count(), 2
+        )
+
+    def test_seller_cannot_skip_fulfillment_status(self):
+        order = self.create_order()
+
+        self.client.force_authenticate(user=self.seller)
+
+        response = self.client.post(
+            f"/api/orders/orders/{order.id}/seller-status/",
+            {
+                "status": Order.StatusChoices.DELIVERED,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_seller_cannot_update_unpaid_order(self):
+        order = self.create_order(
+            status_value=Order.StatusChoices.PENDING_PAYMENT,
+            payment_status=Order.PaymentStatusChoices.UNPAID,
+        )
+
+        self.client.force_authenticate(user=self.seller)
+
+        response = self.client.post(
+            f"/api/orders/orders/{order.id}/seller-status/",
+            {
+                "status": Order.StatusChoices.PROCESSING,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_other_seller_cannot_access_order_without_own_items(self):
+        order = self.create_order()
+
+        seller_without_items = User.objects.create_user(
+            email="empty-seller@example.com",
+            password="pass12345",
+            is_seller=True,
+        )
+
+        self.client.force_authenticate(user=seller_without_items)
+
+        response = self.client.get(f"/api/orders/orders/{order.id}/seller-detail/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_one_seller_cannot_change_other_seller_fulfillment(self):
+        order = self.create_order()
+
+        seller_fulfillment = SellerOrderFulfillment.objects.create(
+            order=order,
+            seller=self.seller,
+            status=Order.StatusChoices.PAID,
+        )
+
+        other_fulfillment = SellerOrderFulfillment.objects.create(
+            order=order,
+            seller=self.other_seller,
+            status=Order.StatusChoices.PAID,
+        )
+
+        self.client.force_authenticate(user=self.seller)
+
+        response = self.client.post(
+            f"/api/orders/orders/{order.id}/seller-status/",
+            {
+                "status": Order.StatusChoices.PROCESSING,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            response.data,
+        )
+
+        seller_fulfillment.refresh_from_db()
+        other_fulfillment.refresh_from_db()
+
+        self.assertEqual(
+            seller_fulfillment.status,
+            Order.StatusChoices.PROCESSING,
+        )
+
+        self.assertEqual(
+            other_fulfillment.status,
+            Order.StatusChoices.PAID,
+        )

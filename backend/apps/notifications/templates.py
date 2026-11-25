@@ -1,0 +1,210 @@
+from apps.notifications.models import Notification
+
+NOTIFICATION_TEMPLATES = {
+    "product_submitted": {
+        "title": "Product submitted",
+        "message": "Your product '{product_name}' has been submitted for review.",
+        "notification_type": Notification.NotificationType.PRODUCT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "product_approved": {
+        "title": "Product approved",
+        "message": "Your product '{product_name}' has been approved.",
+        "notification_type": Notification.NotificationType.PRODUCT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "product_rejected": {
+        "title": "Product rejected",
+        "message": "Your product '{product_name}' has been rejected. Reason: {reason}",
+        "notification_type": Notification.NotificationType.PRODUCT,
+        "priority": Notification.Priority.HIGH,
+    },
+    "low_stock_alert": {
+        "title": "Low stock alert",
+        "message": "Product '{product_name}' is low in stock. Available quantity: {available_quantity}.",
+        "notification_type": Notification.NotificationType.INVENTORY,
+        "priority": Notification.Priority.HIGH,
+    },
+    "order_created": {
+        "title": "Order created",
+        "message": "Your order #{order_id} has been created successfully.",
+        "notification_type": Notification.NotificationType.ORDER,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "order_cancelled": {
+        "title": "Order cancelled",
+        "message": "Your order #{order_id} has been cancelled.",
+        "notification_type": Notification.NotificationType.ORDER,
+        "priority": Notification.Priority.HIGH,
+    },
+    "payment_successful": {
+        "title": "Payment successful",
+        "message": "Your payment for order #{order_id} was successful.",
+        "notification_type": Notification.NotificationType.PAYMENT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "payment_failed": {
+        "title": "Payment failed",
+        "message": "Your payment for order #{order_id} failed.",
+        "notification_type": Notification.NotificationType.PAYMENT,
+        "priority": Notification.Priority.HIGH,
+    },
+    "shipment_created": {
+        "title": "Shipment created",
+        "message": "A shipment has been created for your order #{order_id}.",
+        "notification_type": Notification.NotificationType.SHIPPING,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "shipment_shipped": {
+        "title": "Shipment shipped",
+        "message": "Your shipment for order #{order_id} has been shipped.",
+        "notification_type": Notification.NotificationType.SHIPPING,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "shipment_delivered": {
+        "title": "Shipment delivered",
+        "message": "Your shipment for order #{order_id} has been delivered.",
+        "notification_type": Notification.NotificationType.SHIPPING,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "return_submitted": {
+        "title": "Return request submitted",
+        "message": "Your return request for order #{order_id} has been submitted.",
+        "notification_type": Notification.NotificationType.RETURN,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "return_cancelled": {
+        "title": "Return request cancelled",
+        "message": "Your return request for order #{order_id} has been cancelled.",
+        "notification_type": Notification.NotificationType.RETURN,
+        "priority": Notification.Priority.HIGH,
+    },
+    "return_approved": {
+        "title": "Return request approved",
+        "message": "Your return request for order #{order_id} has been approved.",
+        "notification_type": Notification.NotificationType.RETURN,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "return_rejected": {
+        "title": "Return request rejected",
+        "message": "Your return request for order #{order_id} has been rejected.",
+        "notification_type": Notification.NotificationType.RETURN,
+        "priority": Notification.Priority.HIGH,
+    },
+    "return_received": {
+        "title": "Return item received",
+        "message": "Your returned item for order #{order_id} has been received.",
+        "notification_type": Notification.NotificationType.RETURN,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "return_refunded": {
+        "title": "Return refunded",
+        "message": "Your refund for order #{order_id} has been processed.",
+        "notification_type": Notification.NotificationType.RETURN,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "order_status_updated": {
+        "title": "Order status updated",
+        "message": "Your order #{order_id} status has been updated to {status_display}.",
+        "notification_type": Notification.NotificationType.ORDER,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "payment_cancelled": {
+        "title": "Payment cancelled",
+        "message": "Your payment for order #{order_id} has been cancelled.",
+        "notification_type": Notification.NotificationType.PAYMENT,
+        "priority": Notification.Priority.HIGH,
+    },
+    "shipment_ready": {
+        "title": "Shipment ready",
+        "message": "Your shipment for order #{order_id} is ready for shipping.",
+        "notification_type": Notification.NotificationType.SHIPPING,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "shipment_cancelled": {
+        "title": "Shipment cancelled",
+        "message": "Your shipment for order #{order_id} has been cancelled.",
+        "notification_type": Notification.NotificationType.SHIPPING,
+        "priority": Notification.Priority.HIGH,
+    },
+        "review_submitted": {
+        "title": "Review submitted",
+        "message": "Your review for '{product_name}' has been submitted and is pending approval.",
+        "notification_type": Notification.NotificationType.PRODUCT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "review_approved": {
+        "title": "Review approved",
+        "message": "Your review for '{product_name}' has been approved.",
+        "notification_type": Notification.NotificationType.PRODUCT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "review_rejected": {
+        "title": "Review rejected",
+        "message": "Your review for '{product_name}' has been rejected. Reason: {reason}",
+        "notification_type": Notification.NotificationType.PRODUCT,
+        "priority": Notification.Priority.HIGH,
+    },
+    "review_hidden": {
+        "title": "Review hidden",
+        "message": "Your review for '{product_name}' has been hidden by moderation.",
+        "notification_type": Notification.NotificationType.PRODUCT,
+        "priority": Notification.Priority.HIGH,
+    },
+        "support_ticket_created": {
+        "title": "Support ticket created",
+        "message": "Your support ticket #{ticket_number} has been created.",
+        "notification_type": Notification.NotificationType.SUPPORT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "support_ticket_staff_replied": {
+        "title": "Support replied",
+        "message": "Support has replied to your ticket #{ticket_number}.",
+        "notification_type": Notification.NotificationType.SUPPORT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "support_ticket_customer_replied": {
+        "title": "Customer replied",
+        "message": "Customer replied to support ticket #{ticket_number}.",
+        "notification_type": Notification.NotificationType.SUPPORT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "support_ticket_assigned": {
+        "title": "Support ticket assigned",
+        "message": "Support ticket #{ticket_number} has been assigned to you.",
+        "notification_type": Notification.NotificationType.SUPPORT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "support_ticket_resolved": {
+        "title": "Support ticket resolved",
+        "message": "Your support ticket #{ticket_number} has been resolved.",
+        "notification_type": Notification.NotificationType.SUPPORT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "support_ticket_closed": {
+        "title": "Support ticket closed",
+        "message": "Your support ticket #{ticket_number} has been closed.",
+        "notification_type": Notification.NotificationType.SUPPORT,
+        "priority": Notification.Priority.NORMAL,
+    },
+    "support_ticket_reopened": {
+        "title": "Support ticket reopened",
+        "message": "Your support ticket #{ticket_number} has been reopened.",
+        "notification_type": Notification.NotificationType.SUPPORT,
+        "priority": Notification.Priority.NORMAL,
+    },
+}
+
+
+def render_notification_template(template_key, **context):
+    template = NOTIFICATION_TEMPLATES.get(template_key)
+
+    if template is None:
+        raise ValueError(f"Notification template '{template_key}' does not exist.")
+
+    return {
+        "title": template["title"],
+        "message": template["message"].format(**context),
+        "notification_type": template["notification_type"],
+        "priority": template["priority"],
+    }

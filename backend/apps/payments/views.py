@@ -1,0 +1,277 @@
+# apps/payments/views.py
+
+from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from apps.payments.models import Payment, PaymentEvent
+from apps.payments.serializers import (
+    PaymentCancelSerializer,
+    PaymentCreateSerializer,
+    PaymentDetailSerializer,
+    PaymentFailSerializer,
+    PaymentListSerializer,
+    PaymentSuccessSerializer,
+)
+from apps.payments.services import create_payment_notification
+from apps.rbac.commerce import can_manage, can_view_all
+
+
+class PaymentViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Payment API.
+
+    Main endpoints:
+    - GET    /api/payments/payments/
+    - POST   /api/payments/payments/
+    - GET    /api/payments/payments/{id}/
+    - POST   /api/payments/payments/{id}/mark-success/
+    - POST   /api/payments/payments/{id}/mark-failed/
+    - POST   /api/payments/payments/{id}/cancel/
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    queryset = Payment.objects.select_related(
+        "order",
+        "user",
+        "created_by",
+    ).prefetch_related(
+        "events__created_by",
+    )
+
+    def get_queryset(self):
+        """
+        Normal users can see only their own payments.
+        Explicit commerce readers/managers can see all payments.
+        """
+
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        allowed = can_manage(user, "payments") if self.action in {"mark_success", "mark_failed", "cancel"} else can_view_all(user, "payments")
+        if allowed:
+            return queryset
+
+        return queryset.filter(user=user)
+
+    def get_serializer_class(self):
+        """
+        Choose serializer based on action.
+        """
+
+        if self.action == "list":
+            return PaymentListSerializer
+
+        if self.action == "create":
+            return PaymentCreateSerializer
+
+        if self.action == "mark_success":
+            return PaymentSuccessSerializer
+
+        if self.action == "mark_failed":
+            return PaymentFailSerializer
+
+        if self.action == "cancel":
+            return PaymentCancelSerializer
+
+        return PaymentDetailSerializer
+
+    def _detail_response(self, payment, *, response_status=status.HTTP_200_OK):
+        payment = self.get_queryset().get(pk=payment.pk)
+        serializer = PaymentDetailSerializer(payment, context=self.get_serializer_context())
+        return Response(serializer.data, status=response_status)
+
+    def create(self, request, *args, **kwargs):
+        """
+        Create a new payment attempt for an order.
+
+        Example input:
+        {
+            "order": 1,
+            "provider": "mock"
+        }
+        """
+
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        payment = serializer.save()
+
+        return self._detail_response(payment, response_status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="mark-success")
+    @transaction.atomic
+    def mark_success(self, request, pk=None):
+        """
+        Mark payment as successful.
+
+        For now this is a mock/manual success action.
+        Later, real payment gateway callback can call the same logic.
+        """
+
+        if not getattr(settings, "SETTLEMENTS_ALLOW_MOCK_SUCCESS", False):
+            return Response(
+                {"detail": "Direct mock success is disabled. Use a verified payment integration."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        payment = self.get_object()
+        old_status = payment.status
+
+        serializer = PaymentSuccessSerializer(
+            data=request.data,
+            context={"payment": payment},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        gateway_reference = serializer.validated_data.get("gateway_reference", "")
+        gateway_response = serializer.validated_data.get("gateway_response", {})
+
+        try:
+            payment.mark_success(
+                gateway_reference=gateway_reference,
+                gateway_response=gateway_response,
+            )
+            payment.refresh_from_db()
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": exc.messages if hasattr(exc, "messages") else str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        PaymentEvent.objects.create(
+            payment=payment,
+            event_type="payment_success",
+            old_status=old_status,
+            new_status=payment.status,
+            message="Payment marked as successful.",
+            created_by=request.user,
+            data={
+                "gateway_reference": gateway_reference,
+                "gateway_response": gateway_response,
+            },
+        )
+
+        create_payment_notification(
+            payment=payment,
+            template_key="payment_successful",
+            order_id=payment.order.order_number,
+        )
+
+        return self._detail_response(payment)
+
+    @action(detail=True, methods=["post"], url_path="mark-failed")
+    @transaction.atomic
+    def mark_failed(self, request, pk=None):
+        """
+        Mark payment as failed.
+
+        Important:
+        Failed payment does not cancel the order.
+        User can try another payment attempt later.
+        """
+
+        payment = self.get_object()
+        old_status = payment.status
+
+        serializer = PaymentFailSerializer(
+            data=request.data,
+            context={"payment": payment},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        reason = serializer.validated_data.get("reason", "")
+        gateway_response = serializer.validated_data.get("gateway_response", {})
+
+        try:
+            payment.mark_failed(
+                reason=reason,
+                gateway_response=gateway_response,
+            )
+            payment.refresh_from_db()
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": exc.messages if hasattr(exc, "messages") else str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        PaymentEvent.objects.create(
+            payment=payment,
+            event_type="payment_failed",
+            old_status=old_status,
+            new_status=payment.status,
+            message=reason or "Payment marked as failed.",
+            created_by=request.user,
+            data={
+                "gateway_response": gateway_response,
+            },
+        )
+
+        create_payment_notification(
+            payment=payment,
+            template_key="payment_failed",
+            order_id=payment.order.order_number,
+        )
+
+        return self._detail_response(payment)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    @transaction.atomic
+    def cancel(self, request, pk=None):
+        """
+        Cancel a payment attempt.
+
+        This only cancels the payment attempt.
+        It does not cancel the order.
+        """
+
+        payment = self.get_object()
+        old_status = payment.status
+
+        serializer = PaymentCancelSerializer(
+            data=request.data,
+            context={"payment": payment},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        reason = serializer.validated_data.get("reason", "")
+
+        try:
+            payment.cancel(reason=reason)
+            payment.refresh_from_db()
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": exc.messages if hasattr(exc, "messages") else str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        PaymentEvent.objects.create(
+            payment=payment,
+            event_type="payment_cancelled",
+            old_status=old_status,
+            new_status=payment.status,
+            message=reason or "Payment cancelled.",
+            created_by=request.user,
+            data={},
+        )
+
+        create_payment_notification(
+            payment=payment,
+            template_key="payment_cancelled",
+            order_id=payment.order.order_number,
+        )
+
+        return self._detail_response(payment)

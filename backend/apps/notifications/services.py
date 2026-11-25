@@ -1,0 +1,201 @@
+from datetime import timedelta
+
+from django.db.models import Count
+from django.utils import timezone
+
+from apps.notifications.models import Notification, NotificationPreference
+
+
+def create_notification(
+    *,
+    user,
+    title,
+    message,
+    notification_type=Notification.NotificationType.SYSTEM,
+    channel=Notification.Channel.IN_APP,
+    priority=Notification.Priority.NORMAL,
+    related_object_type="",
+    related_object_id="",
+    action_url="",
+    metadata=None,
+):
+    if metadata is None:
+        metadata = {}
+
+    preference, _ = NotificationPreference.objects.get_or_create(
+        user=user,
+    )
+
+    is_allowed = preference.is_notification_allowed(
+        notification_type=notification_type,
+        channel=channel,
+    )
+
+    if not is_allowed:
+        return None
+
+    return Notification.objects.create(
+        user=user,
+        title=title,
+        message=message,
+        notification_type=notification_type,
+        channel=channel,
+        priority=priority,
+        related_object_type=related_object_type or "",
+        related_object_id=str(related_object_id) if related_object_id else "",
+        action_url=action_url or "",
+        metadata=metadata,
+    )
+
+
+def mark_notification_as_read(*, notification, user):
+    """
+    Mark one notification as read.
+    Normal user can only mark own notifications.
+    """
+
+    if notification.user_id != user.id and not user.is_superuser:
+        raise PermissionError("You cannot update this notification.")
+
+    notification.mark_as_read()
+    return notification
+
+
+def mark_notification_as_unread(*, notification, user):
+    """
+    Mark one notification as unread.
+    Normal user can only mark own notifications.
+    """
+
+    if notification.user_id != user.id and not user.is_superuser:
+        raise PermissionError("You cannot update this notification.")
+
+    notification.mark_as_unread()
+    return notification
+
+
+def mark_all_notifications_as_read(*, user):
+    """
+    Mark all unread notifications of current user as read.
+    """
+
+    unread_notifications = Notification.objects.filter(
+        user=user,
+        is_read=False,
+    )
+
+    now = timezone.now()
+    return unread_notifications.update(is_read=True, read_at=now, updated_at=now)
+
+
+def get_unread_notification_count(*, user):
+    """
+    Count unread notifications of current user.
+    """
+
+    return Notification.objects.filter(
+        user=user,
+        is_read=False,
+    ).count()
+
+
+def delete_read_notifications(*, user):
+    read_notifications = Notification.objects.filter(
+        user=user,
+        is_read=True,
+    )
+
+    count = read_notifications.count()
+    read_notifications.delete()
+
+    return count
+
+
+def delete_all_notifications(*, user):
+    notifications = Notification.objects.filter(user=user)
+
+    count = notifications.count()
+    notifications.delete()
+
+    return count
+
+
+def get_notification_summary(*, user):
+    notifications = Notification.objects.filter(user=user)
+
+    by_type = {
+        item["notification_type"]: item["count"]
+        for item in notifications.values("notification_type").annotate(
+            count=Count("id")
+        )
+    }
+
+    by_priority = {
+        item["priority"]: item["count"]
+        for item in notifications.values("priority").annotate(count=Count("id"))
+    }
+
+    total_count = notifications.count()
+    unread_count = notifications.filter(is_read=False).count()
+    read_count = notifications.filter(is_read=True).count()
+
+    return {
+        "total_count": total_count,
+        "unread_count": unread_count,
+        "read_count": read_count,
+        "by_type": by_type,
+        "by_priority": by_priority,
+    }
+
+
+def mark_selected_notifications_as_read(*, user, notification_ids):
+    notifications = Notification.objects.filter(
+        user=user,
+        id__in=notification_ids,
+        is_read=False,
+    )
+
+    now = timezone.now()
+    return notifications.update(is_read=True, read_at=now, updated_at=now)
+
+
+def delete_selected_notifications(*, user, notification_ids):
+    notifications = Notification.objects.filter(
+        user=user,
+        id__in=notification_ids,
+    )
+
+    count = notifications.count()
+    notifications.delete()
+
+    return count
+
+
+def mark_selected_notifications_as_unread(*, user, notification_ids):
+    notifications = Notification.objects.filter(
+        user=user,
+        id__in=notification_ids,
+        is_read=True,
+    )
+
+    return notifications.update(is_read=False, read_at=None, updated_at=timezone.now())
+
+
+def delete_old_read_notifications(*, days=30, user=None):
+    if days <= 0:
+        raise ValueError("days must be greater than zero.")
+
+    cutoff_date = timezone.now() - timedelta(days=days)
+
+    notifications = Notification.objects.filter(
+        is_read=True,
+        created_at__lt=cutoff_date,
+    )
+
+    if user is not None:
+        notifications = notifications.filter(user=user)
+
+    count = notifications.count()
+    notifications.delete()
+
+    return count

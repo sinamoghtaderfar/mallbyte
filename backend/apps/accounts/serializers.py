@@ -1,0 +1,403 @@
+import re
+
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+from .auth_tokens import issue_user_tokens
+from .models import Address, Profile, Seller
+
+User = get_user_model()
+
+
+class VerifiedTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        attrs[self.username_field] = attrs[self.username_field].strip().lower()
+        return super().validate(attrs)
+
+    @classmethod
+    def get_token(cls, user):
+        if not user.email_verified:
+            raise AuthenticationFailed("Verify your email using OTP before signing in.")
+        return issue_user_tokens(user)
+
+
+class UserSerializer(serializers.ModelSerializer):
+    """Serializer to display user info"""
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "phone",
+            "full_name",
+            "is_seller",
+            "is_staff",
+            "is_superuser",
+            "email_verified",
+        ]
+        read_only_fields = [
+            "id",
+            "is_seller",
+            "is_staff",
+            "is_superuser",
+            "email_verified",
+        ]
+
+
+class RegisterSerializer(serializers.ModelSerializer):
+    """Serializer for registering a new user"""
+
+    password = serializers.CharField(
+        write_only=True,
+        required=True,
+        validators=[validate_password],
+    )
+    password2 = serializers.CharField(
+        write_only=True,
+        required=True,
+    )
+    phone = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=15,
+    )
+
+    class Meta:
+        model = User
+        fields = [
+            "email",
+            "phone",
+            "full_name",
+            "password",
+            "password2",
+        ]
+
+    def validate_email(self, value):
+        value = value.strip().lower()
+        if User.objects.all_with_deleted().filter(email__iexact=value).exists():
+            raise serializers.ValidationError("This email is unavailable.")
+        return value
+
+    def validate_phone(self, value):
+        if not value:
+            return None
+
+        cleaned = re.sub(r'[\s\-\(\)]', '', value)
+
+        pattern = r'^\+\d{1,3}\d{4,14}$'
+        if not re.match(pattern, cleaned):
+            raise serializers.ValidationError(
+                "Phone must be in international format: +[country code][number]"
+            )
+
+        return cleaned
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["password2"]:
+            raise serializers.ValidationError(
+                {
+                    "password": "Passwords don't match"
+                }
+            )
+        validate_password(attrs["password"], user=User(email=attrs.get("email", ""), full_name=attrs.get("full_name", "")))
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop("password2")
+
+        user = User.objects.create_user(**validated_data)
+
+        try:
+            from apps.rbac.models import Role
+            from apps.rbac.utils import assign_role
+
+            customer_role = Role.objects.get(name="customer")
+            assign_role(user, customer_role, None)
+
+        except Role.DoesNotExist:
+            pass
+
+        return user
+
+
+class ProfileSerializer(serializers.ModelSerializer):
+    """Serializer for user profile"""
+
+    user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = Profile
+        fields = [
+            "id",
+            "user",
+            "avatar",
+            "birth_date",
+            "gender",
+            "national_code",
+            "loyalty_points",
+        ]
+        read_only_fields = ["id", "user", "loyalty_points"]
+
+
+class AddressSerializer(serializers.ModelSerializer):
+    """Serializer for user addresses"""
+
+    class Meta:
+        model = Address
+        fields = [
+            "id",
+            "user",
+            "title",
+            "province",
+            "city",
+            "street",
+            "alley",
+            "building_number",
+            "floor",
+            "unit",
+            "postal_code",
+            "receiver_name",
+            "receiver_phone",
+            "is_default",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "user", "created_at", "updated_at"]
+
+    def validate_postal_code(self, value):
+        """
+        Validate postal code.
+
+        Postal code formats differ by country:
+        - Iran often uses 10 digits
+        - Germany uses 5 digits
+        - Some countries use letters, spaces, or hyphens
+
+        So we keep it flexible, but still reject clearly invalid values.
+        """
+        value = value.strip().replace(" ", "")
+
+        if not value.isdigit():
+            raise serializers.ValidationError(
+                "Postal code must contain only digits."
+            )
+
+        if len(value) < 4 or len(value) > 10:
+            raise serializers.ValidationError(
+                "Postal code must be between 4 and 10 digits."
+            )
+
+        return value
+
+    def validate_receiver_phone(self, value):
+        """
+        Validate receiver phone.
+
+        Accepted examples:
+        - 09123456789
+        - +989123456789
+        - +4917612345678
+        """
+        value = value.strip().replace(" ", "").replace("-", "")
+
+        local_pattern = r"^0\d{7,14}$"
+        international_pattern = r"^\+\d{8,15}$"
+
+        if not re.match(local_pattern, value) and not re.match(
+            international_pattern,
+            value,
+        ):
+            raise serializers.ValidationError(
+                "Phone number must be local format like 09123456789 or international format like +989123456789."
+            )
+
+        return value
+
+    def _validate_place_name(self, value, field_name):
+        """
+        Validate city/province names.
+
+        Accepts names with Unicode letters, spaces, hyphens,
+        apostrophes, and dots. Rejects numbers and symbols.
+        """
+        value = value.strip()
+
+        if len(value) < 2 or len(value) > 100:
+            raise serializers.ValidationError(
+                f"{field_name} must be between 2 and 100 characters."
+            )
+
+        allowed_punctuation = {"-", "'", "’", "."}
+
+        if not all(
+            char.isalpha() or char.isspace() or char in allowed_punctuation
+            for char in value
+        ):
+            raise serializers.ValidationError(
+                f"{field_name} can only contain letters, spaces, hyphens, apostrophes, or dots."
+            )
+
+        return value
+
+    def validate_province(self, value):
+        return self._validate_place_name(value, "Province")
+
+    def validate_city(self, value):
+        return self._validate_place_name(value, "City")
+
+
+
+class OTPRequestSerializer(serializers.Serializer):
+    """Serializer for requesting email OTP"""
+
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.strip().lower()
+    
+    
+
+class OTPVerifySerializer(serializers.Serializer):
+    """Serializer for verifying email OTP"""
+
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=6)
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate_code(self, value):
+        if not value.isdigit() or len(value) != 6:
+            raise serializers.ValidationError("Code must be 6 digits")
+
+        return value
+    
+    
+class SellerApplicationSerializer(serializers.ModelSerializer):
+    """Serializer for applying to become a seller"""
+    
+    class Meta:
+        model = Seller
+        fields = [
+            'store_name', 'description', 'business_phone', 
+            'business_email', 'website', 'bank_info', 'documents'
+        ]
+        read_only_fields = ['id']
+    def validate_store_name(self, value):
+        if Seller.objects.filter(store_name=value).exists():
+            raise serializers.ValidationError("This store name is already taken")
+        return value
+
+class SellerSerializer(serializers.ModelSerializer):
+    """Serializer for seller details"""
+
+    user = UserSerializer(read_only=True)
+    
+    class Meta:
+        model= Seller
+        fields = [
+            'id', 'user', 'store_name', 'store_slug', 'logo', 'banner',
+            'description', 'status', 'verified_at', 'business_phone',
+            'business_email', 'website', 'commission_rate', 'total_sales',
+            'total_orders', 'balance', 'applied_at', 'created_at'
+        ]
+        read_only_fields = [
+            'id', 'user', 'store_slug', 'status', 'verified_at',
+            'commission_rate', 'total_sales', 'total_orders', 'balance',
+            'applied_at', 'created_at'
+        ]
+        
+class SellerUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for sellers to update their info"""
+    
+    class Meta:
+        model = Seller
+        fields = [
+            'logo', 'banner', 'description', 'business_phone',
+            'business_email', 'website', 'bank_info'
+        ]
+
+class AdminSellerActionSerializer(serializers.Serializer):
+    """
+    Serializer for admin actions on sellers.
+    """
+    action = serializers.ChoiceField(choices=['approve', 'reject'])
+    reason = serializers.CharField(required=False, allow_blank=True)
+    
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """Serializer for requesting password reset"""
+
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+
+        return email
+
+class PasswordResetVerifySerializer(serializers.Serializer):
+    """Serializer for verifying OTP and resetting password"""
+
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=6)
+    new_password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        validators=[validate_password],
+    )
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate_code(self, value):
+        if not value.isdigit() or len(value) != 6:
+            raise serializers.ValidationError("Code must be 6 digits")
+
+        return value
+
+    def validate(self, attrs):
+        user = User.objects.all_with_deleted().filter(email__iexact=attrs["email"]).first()
+        validate_password(attrs["new_password"], user=user)
+        return attrs
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """Serializer for changing password (when logged in)"""
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True, min_length=8)
+    
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError({"new_password": "Passwords don't match"})
+        validate_password(attrs["new_password"], user=self.context["request"].user)
+        return attrs
+    
+class DeleteAccountSerializer(serializers.Serializer):
+    """Serializer for deleting account"""
+    confirm = serializers.BooleanField(required = True)
+    
+    def validate_confirm(self, value):
+        if not value:
+            raise serializers.ValidationError("You must confirm to delete your account")
+        return value
+    
+class EmailVerifyRequestSerializer(serializers.Serializer):
+    """Serializer for requesting email verification"""
+    email = serializers.EmailField()
+    
+    def validate_email(self, value):
+        value = value.strip().lower()
+        user = self.context["request"].user
+        if User.objects.all_with_deleted().filter(email__iexact=value).exclude(pk=user.pk).exists():
+            raise serializers.ValidationError("This email is unavailable.")
+        if user.email_verified and user.email.casefold() == value.casefold():
+            raise serializers.ValidationError("This email is already verified.")
+        return value
+    
+class EmailVerifyConfirmSerializer(serializers.Serializer):
+    """Serializer for confirming email verification"""
+    token = serializers.CharField()

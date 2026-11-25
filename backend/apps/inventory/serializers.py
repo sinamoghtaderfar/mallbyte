@@ -1,0 +1,666 @@
+from rest_framework import serializers
+
+from apps.inventory.models import Stock, StockMovement, StockTransfer, Warehouse
+from apps.products.models import Product
+
+
+class WarehouseSerializer(serializers.ModelSerializer):
+    """Serializer for creating, updating, and listing warehouses."""
+
+    created_by_name = serializers.ReadOnlyField(source="created_by.full_name")
+    type_display = serializers.CharField(source="get_type_display", read_only=True)
+
+    class Meta:
+        model = Warehouse
+        fields = [
+            "id",
+            "name",
+            "code",
+            "type",
+            "type_display",
+            "province",
+            "city",
+            "address",
+            "postal_code",
+            "phone",
+            "email",
+            "manager_name",
+            "manager_phone",
+            "is_active",
+            "created_by",
+            "created_by_name",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_by_name",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_code(self, value):
+        return value.upper().strip()
+
+
+class WarehouseListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for warehouse lists."""
+
+    type_display = serializers.CharField(source="get_type_display", read_only=True)
+
+    class Meta:
+        model = Warehouse
+        fields = [
+            "id",
+            "name",
+            "code",
+            "type",
+            "type_display",
+            "city",
+            "is_active",
+        ]
+
+
+class StockSerializer(serializers.ModelSerializer):
+    """
+    Stock records may contain product, warehouse and location
+    metadata, but their quantities cannot be edited directly.
+
+    Physical stock changes must be recorded through movements.
+    Reservations belong to the order workflow.
+    """
+
+    product_name = serializers.ReadOnlyField(source="product.name")
+    product_sku = serializers.ReadOnlyField(source="product.sku")
+    warehouse_name = serializers.ReadOnlyField(source="warehouse.name")
+    warehouse_code = serializers.ReadOnlyField(source="warehouse.code")
+
+    available_quantity = serializers.IntegerField(read_only=True)
+    is_low_stock = serializers.BooleanField(read_only=True)
+    updated_by_name = serializers.ReadOnlyField(source="updated_by.full_name")
+
+    class Meta:
+        model = Stock
+
+        fields = [
+            "id",
+            "product",
+            "product_name",
+            "product_sku",
+            "warehouse",
+            "warehouse_name",
+            "warehouse_code",
+            "quantity",
+            "reserved_quantity",
+            "available_quantity",
+            "low_stock_threshold",
+            "is_low_stock",
+            "aisle",
+            "shelf",
+            "bin_code",
+            "updated_by",
+            "updated_by_name",
+            "last_updated",
+        ]
+
+        read_only_fields = [
+            "id",
+            "quantity",
+            "reserved_quantity",
+            "available_quantity",
+            "is_low_stock",
+            "updated_by",
+            "updated_by_name",
+            "last_updated",
+        ]
+
+    def validate(self, attrs):
+        errors = {}
+
+        # Explicitly reject forbidden fields rather than
+        # silently ignoring them.
+        for field in ("quantity", "reserved_quantity"):
+            if field in self.initial_data:
+                errors[field] = (
+                    "This field cannot be modified directly. "
+                    "Use the appropriate inventory workflow."
+                )
+
+        # An existing stock record must remain associated
+        # with its original product and warehouse.
+        if self.instance is not None:
+            if "product" in attrs and attrs["product"].pk != self.instance.product_id:
+                errors["product"] = (
+                    "The product of an existing stock " "record cannot be changed."
+                )
+
+            if (
+                "warehouse" in attrs
+                and attrs["warehouse"].pk != self.instance.warehouse_id
+            ):
+                errors["warehouse"] = (
+                    "The warehouse of an existing stock "
+                    "record cannot be changed. "
+                    "Use a stock transfer instead."
+                )
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        # A metadata request may have loaded this instance before a checkout or
+        # stock movement committed. Never write its stale quantity/reservation.
+        metadata_fields = {
+            "low_stock_threshold", "aisle", "shelf", "bin_code", "updated_by",
+        }
+        changed = []
+        for field, value in validated_data.items():
+            if field in metadata_fields:
+                setattr(instance, field, value)
+                changed.append(field)
+        if changed:
+            instance.save(update_fields=[*changed, "last_updated"])
+        instance.refresh_from_db()
+        return instance
+
+
+class StockListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for stock lists."""
+
+    product_name = serializers.ReadOnlyField(source="product.name")
+    product_sku = serializers.ReadOnlyField(source="product.sku")
+    warehouse_name = serializers.ReadOnlyField(source="warehouse.name")
+    warehouse_code = serializers.ReadOnlyField(source="warehouse.code")
+    available_quantity = serializers.IntegerField(read_only=True)
+    is_low_stock = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Stock
+        fields = [
+            "id",
+            "product",
+            "product_name",
+            "product_sku",
+            "warehouse",
+            "warehouse_name",
+            "warehouse_code",
+            "quantity",
+            "reserved_quantity",
+            "available_quantity",
+            "low_stock_threshold",
+            "is_low_stock",
+            "last_updated",
+        ]
+
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    """
+    Create auditable manual inventory movements.
+
+    Sales and warehouse transfer movements are created
+    internally by their respective business workflows.
+    """
+
+    product_name = serializers.ReadOnlyField(source="product.name")
+    product_sku = serializers.ReadOnlyField(source="product.sku")
+    warehouse_name = serializers.ReadOnlyField(source="warehouse.name")
+    warehouse_code = serializers.ReadOnlyField(source="warehouse.code")
+
+    movement_type_display = serializers.CharField(
+        source="get_movement_type_display",
+        read_only=True,
+    )
+
+    created_by_name = serializers.ReadOnlyField(source="created_by.full_name")
+
+    reason = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+
+    MANUAL_MOVEMENT_TYPES = {
+        StockMovement.MovementType.PURCHASE,
+        StockMovement.MovementType.RETURN,
+        StockMovement.MovementType.ADJUSTMENT,
+        StockMovement.MovementType.DAMAGED,
+    }
+
+    class Meta:
+        model = StockMovement
+
+        fields = [
+            "id",
+            "product",
+            "product_name",
+            "product_sku",
+            "warehouse",
+            "warehouse_name",
+            "warehouse_code",
+            "movement_type",
+            "movement_type_display",
+            "quantity",
+            "reference_id",
+            "reason",
+            "before_quantity",
+            "after_quantity",
+            "created_by",
+            "created_by_name",
+            "created_at",
+            "notes",
+        ]
+
+        read_only_fields = [
+            "id",
+            "before_quantity",
+            "after_quantity",
+            "created_by",
+            "created_by_name",
+            "created_at",
+        ]
+
+    def validate(self, attrs):
+        movement_type = attrs.get("movement_type")
+        quantity = attrs.get("quantity")
+
+        if movement_type not in self.MANUAL_MOVEMENT_TYPES:
+            raise serializers.ValidationError(
+                {
+                    "movement_type": (
+                        "This movement type cannot be created "
+                        "manually. Use its dedicated workflow."
+                    )
+                }
+            )
+
+        if quantity == 0:
+            raise serializers.ValidationError({"quantity": "Quantity cannot be zero."})
+
+        increase_types = {
+            StockMovement.MovementType.PURCHASE,
+            StockMovement.MovementType.RETURN,
+        }
+
+        decrease_types = {
+            StockMovement.MovementType.DAMAGED,
+        }
+
+        if movement_type in increase_types and quantity < 0:
+            raise serializers.ValidationError(
+                {"quantity": ("This movement type requires " "a positive quantity.")}
+            )
+
+        if movement_type in decrease_types and quantity > 0:
+            raise serializers.ValidationError(
+                {"quantity": ("This movement type requires " "a negative quantity.")}
+            )
+
+        reason = attrs.get("reason", "").strip()
+
+        if not reason:
+            raise serializers.ValidationError(
+                {
+                    "reason": (
+                        "A reason is required for every " "manual inventory movement."
+                    )
+                }
+            )
+
+        attrs["reason"] = reason
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+
+        if request and request.user and request.user.is_authenticated:
+            validated_data["created_by"] = request.user
+
+        return super().create(validated_data)
+
+
+class StockMovementListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for stock movement history."""
+
+    product_name = serializers.ReadOnlyField(source="product.name")
+    product_sku = serializers.ReadOnlyField(source="product.sku")
+    warehouse_name = serializers.ReadOnlyField(source="warehouse.name")
+    warehouse_code = serializers.ReadOnlyField(source="warehouse.code")
+    movement_type_display = serializers.CharField(
+        source="get_movement_type_display",
+        read_only=True,
+    )
+    created_by_name = serializers.ReadOnlyField(source="created_by.full_name")
+
+    class Meta:
+        model = StockMovement
+        fields = [
+            "id",
+            "product",
+            "product_name",
+            "product_sku",
+            "warehouse",
+            "warehouse_name",
+            "warehouse_code",
+            "movement_type",
+            "movement_type_display",
+            "quantity",
+            "before_quantity",
+            "after_quantity",
+            "reference_id",
+            "reason",
+            "notes",
+            "created_by_name",
+            "created_at",
+        ]
+
+
+class StockTransferSerializer(serializers.ModelSerializer):
+    """Serializer for stock transfers."""
+
+    product_name = serializers.ReadOnlyField(source="product.name")
+    product_sku = serializers.ReadOnlyField(source="product.sku")
+
+    from_warehouse_name = serializers.ReadOnlyField(source="from_warehouse.name")
+    from_warehouse_code = serializers.ReadOnlyField(source="from_warehouse.code")
+
+    to_warehouse_name = serializers.ReadOnlyField(source="to_warehouse.name")
+    to_warehouse_code = serializers.ReadOnlyField(source="to_warehouse.code")
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    requested_by_name = serializers.ReadOnlyField(source="requested_by.full_name")
+    approved_by_name = serializers.ReadOnlyField(source="approved_by.full_name")
+
+    shipped_by_name = serializers.ReadOnlyField(source="shipped_by.full_name")
+
+    received_by_name = serializers.ReadOnlyField(source="received_by.full_name")
+
+    class Meta:
+        model = StockTransfer
+
+        fields = [
+            "id",
+            "from_warehouse",
+            "from_warehouse_name",
+            "from_warehouse_code",
+            "to_warehouse",
+            "to_warehouse_name",
+            "to_warehouse_code",
+            "product",
+            "product_name",
+            "product_sku",
+            "quantity",
+            "status",
+            "status_display",
+            "tracking_number",
+            "shipped_by",
+            "shipped_by_name",
+            "shipped_at",
+            "received_by",
+            "received_by_name",
+            "received_at",
+            "reason",
+            "requested_by",
+            "requested_by_name",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
+            "created_at",
+            "updated_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "status",
+            "shipped_at",
+            "delivered_at",
+            "requested_by",
+            "requested_by_name",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
+            "created_at",
+            "updated_at",
+            "tracking_number",
+            "shipped_by",
+            "shipped_by_name",
+            "shipped_at",
+            "received_by",
+            "received_by_name",
+            "received_at",
+        ]
+
+    def validate(self, attrs):
+        from_warehouse = attrs.get(
+            "from_warehouse",
+            getattr(
+                self.instance,
+                "from_warehouse",
+                None,
+            ),
+        )
+
+        to_warehouse = attrs.get(
+            "to_warehouse",
+            getattr(
+                self.instance,
+                "to_warehouse",
+                None,
+            ),
+        )
+
+        product = attrs.get(
+            "product",
+            getattr(
+                self.instance,
+                "product",
+                None,
+            ),
+        )
+
+        quantity = attrs.get(
+            "quantity",
+            getattr(
+                self.instance,
+                "quantity",
+                None,
+            ),
+        )
+
+        if from_warehouse and to_warehouse and from_warehouse == to_warehouse:
+            raise serializers.ValidationError(
+                {
+                    "to_warehouse": (
+                        "Source and destination warehouses " "cannot be the same."
+                    )
+                }
+            )
+
+        if quantity is not None and quantity <= 0:
+            raise serializers.ValidationError(
+                {"quantity": ("Transfer quantity must be greater than zero.")}
+            )
+
+        if from_warehouse and not from_warehouse.is_active:
+            raise serializers.ValidationError(
+                {"from_warehouse": ("Source warehouse must be active.")}
+            )
+
+        if to_warehouse and not to_warehouse.is_active:
+            raise serializers.ValidationError(
+                {"to_warehouse": ("Destination warehouse must be active.")}
+            )
+
+        if (
+            self.instance is None
+            and product
+            and from_warehouse
+            and quantity is not None
+        ):
+            try:
+                stock = Stock.objects.get(
+                    product=product,
+                    warehouse=from_warehouse,
+                )
+
+            except Stock.DoesNotExist as exc:
+                raise serializers.ValidationError(
+                    {
+                        "product": (
+                            "This product has no stock record "
+                            "in the source warehouse."
+                        )
+                    }
+                ) from exc
+
+            if stock.available_quantity < quantity:
+                raise serializers.ValidationError(
+                    {
+                        "quantity": (
+                            "Transfer quantity cannot exceed "
+                            f"available stock "
+                            f"({stock.available_quantity})."
+                        )
+                    }
+                )
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+
+        if request and request.user and request.user.is_authenticated:
+            validated_data["requested_by"] = request.user
+
+        return super().create(validated_data)
+
+
+class StockTransferListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for stock transfer lists."""
+
+    product_name = serializers.ReadOnlyField(source="product.name")
+    product_sku = serializers.ReadOnlyField(source="product.sku")
+
+    from_warehouse_name = serializers.ReadOnlyField(source="from_warehouse.name")
+    from_warehouse_code = serializers.ReadOnlyField(source="from_warehouse.code")
+
+    to_warehouse_name = serializers.ReadOnlyField(source="to_warehouse.name")
+    to_warehouse_code = serializers.ReadOnlyField(source="to_warehouse.code")
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    requested_by_name = serializers.ReadOnlyField(source="requested_by.full_name")
+    approved_by_name = serializers.ReadOnlyField(source="approved_by.full_name")
+
+    shipped_by_name = serializers.ReadOnlyField(source="shipped_by.full_name")
+
+    received_by_name = serializers.ReadOnlyField(source="received_by.full_name")
+
+    class Meta:
+        model = StockTransfer
+
+        fields = [
+            "id",
+            "product",
+            "product_name",
+            "product_sku",
+            "from_warehouse",
+            "from_warehouse_name",
+            "from_warehouse_code",
+            "to_warehouse",
+            "to_warehouse_name",
+            "to_warehouse_code",
+            "quantity",
+            "status",
+            "status_display",
+            "tracking_number",
+            "shipped_at",
+            "shipped_by",
+            "shipped_by_name",
+            "shipped_at",
+            "received_by",
+            "received_by_name",
+            "received_at",
+            "reason",
+            "requested_by",
+            "requested_by_name",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class StockReserveSerializer(serializers.Serializer):
+    """Serializer for reserving stock."""
+
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
+    quantity = serializers.IntegerField(min_value=1)
+
+    def validate(self, attrs):
+        product = attrs["product"]
+        warehouse = attrs["warehouse"]
+        quantity = attrs["quantity"]
+
+        try:
+            stock = Stock.objects.get(product=product, warehouse=warehouse)
+        except Stock.DoesNotExist as exc:
+            raise serializers.ValidationError(
+                "Stock record does not exist for this product and warehouse."
+            ) from exc
+
+        if stock.available_quantity < quantity:
+            raise serializers.ValidationError("Not enough available stock to reserve.")
+
+        attrs["stock"] = stock
+        return attrs
+
+
+class StockReleaseReservationSerializer(serializers.Serializer):
+    """Serializer for releasing reserved stock."""
+
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
+    quantity = serializers.IntegerField(min_value=1)
+
+    def validate(self, attrs):
+        product = attrs["product"]
+        warehouse = attrs["warehouse"]
+        quantity = attrs["quantity"]
+
+        try:
+            stock = Stock.objects.get(product=product, warehouse=warehouse)
+        except Stock.DoesNotExist as exc:
+            raise serializers.ValidationError(
+                "Stock record does not exist for this product and warehouse."
+            ) from exc
+
+        if stock.reserved_quantity < quantity:
+            raise serializers.ValidationError(
+                "Cannot release more than reserved quantity."
+            )
+
+        attrs["stock"] = stock
+        return attrs
+
+
+class StockTransferActionSerializer(serializers.Serializer):
+    """Serializer for transfer actions like in_transit, complete, cancel."""
+
+    tracking_number = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+    )

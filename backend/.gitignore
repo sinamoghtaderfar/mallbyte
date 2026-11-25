@@ -1,0 +1,52 @@
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.pyd
+*.env
+venv/
+.venv/
+.env/
+*.swp
+setupfarsi.txt
+
+# Django
+*.sqlite3
+/db.sqlite3
+/media/
+/private_media/
+staticfiles/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+
+.ruff_cache.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Generated export files
+*_export.csv
+*_export.xlsx
+media/
+
+# Docker local environment
+.env.docker
+mallbyte_docker_backup.sql
+
+# Deployment secrets: always local to an operator host.
+.env.production
+.env.staging
+.env.*
+!.env.*.example

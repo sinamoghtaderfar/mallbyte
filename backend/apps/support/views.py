@@ -1,0 +1,919 @@
+from pathlib import Path
+
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q
+from django.http import FileResponse, Http404
+from django.utils import timezone
+from django.utils.http import content_disposition_header
+from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.parsers import (
+    FormParser,
+    MultiPartParser,
+)
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from apps.support.attachment_validation import SUPPORT_ATTACHMENT_MIME_TYPES
+from apps.support.models import (
+    SupportTag,
+    SupportTicket,
+    TicketAttachment,
+    TicketAuditLog,
+    TicketMessage,
+)
+from apps.support.notifications import (
+    create_support_notification,
+)
+from apps.support.permissions import (
+    VIEW_SUPPORT_INTERNAL_NOTES,
+    CanAccessSupportAttachments,
+    CanAssignSupportTickets,
+    CanChangeSupportPriority,
+    CanCloseSupportTickets,
+    CanManageSupportTags,
+    CanReopenSupportTickets,
+    CanResolveSupportTickets,
+    CanRespondToSupportTicket,
+    CanViewSupportAuditLogs,
+    IsTicketParticipantOrSupportStaff,
+    has_support_permission,
+    is_support_staff,
+)
+from apps.support.serializers import (
+    SupportTagSerializer,
+    SupportTicketSerializer,
+    TicketAssignSerializer,
+    TicketAttachmentSerializer,
+    TicketAuditLogSerializer,
+    TicketMessageSerializer,
+    TicketPrioritySerializer,
+    TicketReplySerializer,
+    TicketTagSerializer,
+)
+
+User = get_user_model()
+
+
+class SupportTagViewSet(viewsets.ModelViewSet):
+    serializer_class = SupportTagSerializer
+    queryset = SupportTag.objects.all().order_by("name")
+
+    def get_permissions(self):
+        if self.action in [
+            "list",
+            "retrieve",
+        ]:
+            permission_classes = [
+                IsAuthenticated,
+            ]
+        else:
+            permission_classes = [
+                IsAuthenticated,
+                CanManageSupportTags,
+            ]
+
+        return [permission() for permission in permission_classes]
+
+
+class SupportTicketViewSet(viewsets.ModelViewSet):
+    serializer_class = SupportTicketSerializer
+
+    permission_classes = [
+        IsAuthenticated,
+        IsTicketParticipantOrSupportStaff,
+    ]
+
+    http_method_names = [
+        "get",
+        "post",
+        "head",
+        "options",
+    ]
+
+    action_permission_classes = {
+        "attachments": [
+            IsAuthenticated,
+            CanAccessSupportAttachments,
+        ],
+        "download_attachment": [
+            IsAuthenticated,
+            CanAccessSupportAttachments,
+        ],
+        "reply": [
+            IsAuthenticated,
+            CanRespondToSupportTicket,
+        ],
+        "agents": [
+            IsAuthenticated,
+            CanAssignSupportTickets,
+        ],
+        "assign": [
+            IsAuthenticated,
+            CanAssignSupportTickets,
+        ],
+        "add_tag": [
+            IsAuthenticated,
+            CanManageSupportTags,
+        ],
+        "remove_tag": [
+            IsAuthenticated,
+            CanManageSupportTags,
+        ],
+        "priority": [
+            IsAuthenticated,
+            CanChangeSupportPriority,
+        ],
+        "resolve": [
+            IsAuthenticated,
+            CanResolveSupportTickets,
+        ],
+        "close": [
+            IsAuthenticated,
+            CanCloseSupportTickets,
+        ],
+        "reopen": [
+            IsAuthenticated,
+            CanReopenSupportTickets,
+        ],
+        "audit_logs": [
+            IsAuthenticated,
+            CanViewSupportAuditLogs,
+        ],
+    }
+
+    def get_permissions(self):
+        permission_classes = self.action_permission_classes.get(self.action)
+
+        if permission_classes is None:
+            return super().get_permissions()
+
+        return [permission() for permission in permission_classes]
+
+    def get_object(self):
+        if self.request.method == "POST":
+            # Every detail mutation below is atomic. Lock only the ticket row,
+            # avoiding nullable joined rows and FK key-share deadlocks.
+            queryset = self.filter_queryset(self.get_queryset()).select_for_update(no_key=True, of=("self",))
+            from django.shortcuts import get_object_or_404
+            ticket = get_object_or_404(queryset, pk=self.kwargs["pk"])
+            self.check_object_permissions(self.request, ticket)
+            return ticket
+        return super().get_object()
+
+    def get_queryset(self):
+        user = self.request.user
+        messages = TicketMessage.objects.select_related("sender").order_by("-created_at", "-pk")
+        if not has_support_permission(user, VIEW_SUPPORT_INTERNAL_NOTES):
+            messages = messages.filter(is_internal_note=False)
+        attachments = TicketAttachment.objects.select_related("uploaded_by").order_by("-created_at", "-pk")
+
+        queryset = (
+            SupportTicket.objects.select_related(
+                "customer",
+                "assigned_to",
+                "order",
+                "product",
+                "return_request",
+            )
+            .prefetch_related(
+                "tags",
+                Prefetch("messages", queryset=messages[:51], to_attr="visible_messages"),
+                Prefetch("attachments", queryset=attachments[:51], to_attr="visible_attachments"),
+            )
+            .all()
+        )
+
+        if not is_support_staff(user):
+            queryset = queryset.filter(customer=user)
+
+        status_filter = self.request.query_params.get("status")
+        priority = self.request.query_params.get("priority")
+        category = self.request.query_params.get("category")
+        assigned_to = self.request.query_params.get("assigned_to")
+        customer = self.request.query_params.get("customer")
+        if customer:
+            try:
+                customer = int(customer)
+                if customer < 1:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({"customer": "Expected a positive integer."}) from exc
+        order = self.request.query_params.get("order")
+        if order:
+            try:
+                order = int(order)
+                if order < 1:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({"order": "Expected a positive integer."}) from exc
+        product = self.request.query_params.get("product")
+        if product:
+            try:
+                product = int(product)
+                if product < 1:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({"product": "Expected a positive integer."}) from exc
+        ordering = self.request.query_params.get("ordering")
+
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        if priority:
+            queryset = queryset.filter(priority=priority)
+
+        if category:
+            queryset = queryset.filter(category=category)
+
+        if order:
+            queryset = queryset.filter(order_id=order)
+
+        if product:
+            queryset = queryset.filter(product_id=product)
+
+        if assigned_to:
+            if assigned_to == "me":
+                queryset = queryset.filter(assigned_to=user)
+            elif is_support_staff(user):
+                try:
+                    assigned_to = int(assigned_to)
+                    if assigned_to < 1:
+                        raise ValueError
+                except (TypeError, ValueError) as exc:
+                    raise serializers.ValidationError({"assigned_to": "Expected a positive integer or 'me'."}) from exc
+                queryset = queryset.filter(assigned_to_id=assigned_to)
+
+        if customer and is_support_staff(user):
+            queryset = queryset.filter(customer_id=customer)
+
+        allowed_ordering_fields = {
+            "created_at",
+            "-created_at",
+            "updated_at",
+            "-updated_at",
+            "last_message_at",
+            "-last_message_at",
+            "status",
+            "-status",
+            "priority",
+            "-priority",
+        }
+
+        if ordering in allowed_ordering_fields:
+            queryset = queryset.order_by(ordering)
+
+        return queryset
+
+    def refresh_ticket_projection(self, ticket):
+        # Mutations may add messages/tags/attachments after the initial prefetch.
+        # Refresh once rather than serializing a stale related-object cache.
+        return self.get_queryset().get(pk=ticket.pk)
+
+    def get_serializer(self, *args, **kwargs):
+        if args and isinstance(args[0], SupportTicket) and self.request.method == "POST" and args[0].pk:
+            args = (self.refresh_ticket_projection(args[0]), *args[1:])
+        return super().get_serializer(*args, **kwargs)
+
+    @action(detail=True, methods=["get"], url_path="messages")
+    def messages(self, request, pk=None):
+        ticket = self.get_object()
+        queryset = ticket.messages.select_related("sender").order_by("created_at", "pk")
+        if not has_support_permission(request.user, VIEW_SUPPORT_INTERNAL_NOTES):
+            queryset = queryset.filter(is_internal_note=False)
+        page = self.paginate_queryset(queryset)
+        serializer = TicketMessageSerializer(page if page is not None else queryset[:50], many=True)
+        return self.get_paginated_response(serializer.data) if page is not None else Response(serializer.data)
+
+    def bounded_collection_response(self, queryset, serializer_class):
+        # Keep the existing array body; expose deterministic next/previous pages
+        # through headers so collection size remains bounded.
+        page = self.paginate_queryset(queryset)
+        serializer = serializer_class(page if page is not None else queryset[:50], many=True, context={"request": self.request})
+        response = Response(serializer.data)
+        if page is not None:
+            response["X-Total-Count"] = str(self.paginator.page.paginator.count)
+            links = []
+            for relation, url in (("next", self.paginator.get_next_link()), ("prev", self.paginator.get_previous_link())):
+                if url:
+                    links.append(f'<{url}>; rel="{relation}"')
+            if links:
+                response["Link"] = ", ".join(links)
+        return response
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="summary",
+    )
+    def summary(self, request):
+        queryset = self.get_queryset()
+
+        status_summary = queryset.aggregate(
+            total=Count("id"),
+            open=Count(
+                "id",
+                filter=Q(status=(SupportTicket.StatusChoices.OPEN)),
+            ),
+            pending=Count(
+                "id",
+                filter=Q(status=(SupportTicket.StatusChoices.PENDING)),
+            ),
+            resolved=Count(
+                "id",
+                filter=Q(status=(SupportTicket.StatusChoices.RESOLVED)),
+            ),
+            closed=Count(
+                "id",
+                filter=Q(status=(SupportTicket.StatusChoices.CLOSED)),
+            ),
+        )
+
+        priority_summary = queryset.aggregate(
+            low=Count(
+                "id",
+                filter=Q(priority=(SupportTicket.PriorityChoices.LOW)),
+            ),
+            normal=Count(
+                "id",
+                filter=Q(priority=(SupportTicket.PriorityChoices.NORMAL)),
+            ),
+            high=Count(
+                "id",
+                filter=Q(priority=(SupportTicket.PriorityChoices.HIGH)),
+            ),
+            urgent=Count(
+                "id",
+                filter=Q(priority=(SupportTicket.PriorityChoices.URGENT)),
+            ),
+        )
+
+        category_summary = queryset.aggregate(
+            order=Count(
+                "id",
+                filter=Q(category=(SupportTicket.CategoryChoices.ORDER)),
+            ),
+            payment=Count(
+                "id",
+                filter=Q(category=(SupportTicket.CategoryChoices.PAYMENT)),
+            ),
+            shipping=Count(
+                "id",
+                filter=Q(category=(SupportTicket.CategoryChoices.SHIPPING)),
+            ),
+            return_ticket=Count(
+                "id",
+                filter=Q(category=(SupportTicket.CategoryChoices.RETURN)),
+            ),
+            product=Count(
+                "id",
+                filter=Q(category=(SupportTicket.CategoryChoices.PRODUCT)),
+            ),
+            account=Count(
+                "id",
+                filter=Q(category=(SupportTicket.CategoryChoices.ACCOUNT)),
+            ),
+            other=Count(
+                "id",
+                filter=Q(category=(SupportTicket.CategoryChoices.OTHER)),
+            ),
+        )
+
+        assigned_to_me_count = queryset.filter(assigned_to=request.user).count()
+
+        unassigned_count = queryset.filter(assigned_to__isnull=True).count()
+
+        return Response(
+            {
+                "status": status_summary,
+                "priority": priority_summary,
+                "category": category_summary,
+                "assigned_to_me": (assigned_to_me_count),
+                "unassigned": (unassigned_count),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["get"], url_path=r"attachments/(?P<attachment_id>[0-9]+)/download")
+    def download_attachment(self, request, pk=None, attachment_id=None):
+        ticket = self.get_object()
+        attachment = ticket.attachments.filter(pk=attachment_id).first()
+        if attachment is None:
+            raise Http404
+
+        try:
+            stream = attachment.file.open("rb")
+        except (FileNotFoundError, OSError, ValueError):
+            raise Http404 from None
+
+        name = Path(attachment.original_filename).name or "attachment"
+        extension = Path(name).suffix.lower()
+        response = FileResponse(
+            stream,
+            content_type=SUPPORT_ATTACHMENT_MIME_TYPES.get(extension, "application/octet-stream"),
+        )
+        response["Content-Disposition"] = content_disposition_header(True, name)
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="attachments",
+        parser_classes=[
+            MultiPartParser,
+            FormParser,
+        ],
+    )
+    @transaction.atomic
+    def attachments(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+
+        if request.method == "GET":
+            return self.bounded_collection_response(ticket.attachments.select_related("uploaded_by").order_by("-created_at", "-pk"), TicketAttachmentSerializer)
+
+        if ticket.status == SupportTicket.StatusChoices.CLOSED:
+            return Response(
+                {
+                    "detail": (
+                        "Cannot upload attachments to a closed "
+                        "ticket. Reopen it first."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = TicketAttachmentSerializer(
+            data=request.data,
+            context={
+                "request": request,
+            },
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        uploaded_file = serializer.validated_data["file"]
+
+        attachment = TicketAttachment(
+            ticket=ticket,
+            uploaded_by=request.user,
+            file=uploaded_file,
+            original_filename=getattr(
+                uploaded_file,
+                "name",
+                "",
+            ),
+            content_type=SUPPORT_ATTACHMENT_MIME_TYPES[Path(uploaded_file.name).suffix.lower()],
+            size=(
+                getattr(
+                    uploaded_file,
+                    "size",
+                    0,
+                )
+                or 0
+            ),
+        )
+
+        try:
+            attachment.save()
+            TicketAuditLog.log(
+                ticket=ticket,
+                actor=request.user,
+                action=(TicketAuditLog.ActionChoices.ATTACHMENT_ADDED),
+                description="Attachment uploaded.",
+                metadata={
+                    "attachment_id": (attachment.pk),
+                    "filename": (attachment.original_filename),
+                    "size": attachment.size,
+                },
+            )
+
+        except Exception:
+            if attachment.file and attachment.file.name and attachment.file._committed:
+                attachment.file.storage.delete(attachment.file.name)
+            raise
+
+        response_serializer = TicketAttachmentSerializer(
+            attachment,
+            context={
+                "request": request,
+            },
+        )
+
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="add-tag",
+    )
+    @transaction.atomic
+    def add_tag(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+
+        serializer = TicketTagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        tag = serializer.validated_data["tag"]
+
+        ticket.tags.add(tag)
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.TAG_ADDED),
+            description=(f"Tag '{tag.name}' added."),
+            metadata={
+                "tag_id": tag.pk,
+                "tag_name": tag.name,
+            },
+        )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="remove-tag",
+    )
+    @transaction.atomic
+    def remove_tag(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+
+        serializer = TicketTagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        tag = serializer.validated_data["tag"]
+
+        ticket.tags.remove(tag)
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.TAG_REMOVED),
+            description=(f"Tag '{tag.name}' removed."),
+            metadata={
+                "tag_id": tag.pk,
+                "tag_name": tag.name,
+            },
+        )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="audit-logs",
+    )
+    def audit_logs(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+
+        return self.bounded_collection_response(ticket.audit_logs.select_related("actor").order_by("-created_at", "-pk"), TicketAuditLogSerializer)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reply",
+    )
+    @transaction.atomic
+    def reply(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+
+        if ticket.status == SupportTicket.StatusChoices.CLOSED:
+            return Response(
+                {"detail": ("Cannot reply to a closed " "ticket. Reopen it first.")},
+                status=(status.HTTP_400_BAD_REQUEST),
+            )
+
+        serializer = TicketReplySerializer(
+            data=request.data,
+            context={
+                "request": request,
+                "ticket": ticket,
+            },
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        is_internal_note = serializer.validated_data.get(
+            "is_internal_note",
+            False,
+        )
+
+        message = TicketMessage.objects.create(
+            ticket=ticket,
+            sender=request.user,
+            message=(serializer.validated_data["message"]),
+            is_internal_note=(is_internal_note),
+        )
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(
+                TicketAuditLog.ActionChoices.INTERNAL_NOTE_CREATED
+                if is_internal_note
+                else (TicketAuditLog.ActionChoices.REPLIED)
+            ),
+            description=(
+                "Internal note created." if is_internal_note else "Ticket reply added."
+            ),
+            metadata={
+                "message_id": message.pk,
+            },
+        )
+
+        update_fields = ["updated_at"]
+
+        is_customer_reply = ticket.customer_id == request.user.id
+
+        if not is_internal_note:
+            ticket.last_message_at = timezone.now()
+
+            update_fields.append("last_message_at")
+
+            if is_customer_reply:
+                ticket.status = SupportTicket.StatusChoices.OPEN
+            else:
+                ticket.status = SupportTicket.StatusChoices.PENDING
+
+            update_fields.append("status")
+            ticket.resolved_at = None
+            ticket.closed_at = None
+            update_fields.extend(["resolved_at", "closed_at"])
+
+        ticket.save(update_fields=update_fields)
+
+        if not is_internal_note:
+            if is_customer_reply:
+                if ticket.assigned_to:
+                    create_support_notification(
+                        user=ticket.assigned_to,
+                        ticket=ticket,
+                        template_key=("support_ticket_" "customer_replied"),
+                        ticket_number=(ticket.ticket_number),
+                    )
+            else:
+                create_support_notification(
+                    user=ticket.customer,
+                    ticket=ticket,
+                    template_key=("support_ticket_" "staff_replied"),
+                    ticket_number=(ticket.ticket_number),
+                )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="agents",
+    )
+    def agents(self, request):
+        from apps.rbac.models import UserRole
+        from apps.support.serializers import SupportAgentSerializer
+
+        assignments = UserRole.objects.filter(user_id=OuterRef("pk"), is_active=True).filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+        )
+        users = User.objects.filter(is_active=True).annotate(
+            can_view=Exists(assignments.filter(role__role_permissions__permission__codename="view_all_support_tickets")),
+            can_reply=Exists(assignments.filter(role__role_permissions__permission__codename="reply_support_tickets")),
+        ).filter(Q(is_superuser=True) | Q(can_view=True, can_reply=True)).only("id", "email", "full_name").order_by("full_name", "email", "pk")
+        return self.bounded_collection_response(users, SupportAgentSerializer)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="assign",
+    )
+    @transaction.atomic
+    def assign(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+
+        serializer = TicketAssignSerializer(data=request.data)
+
+        serializer.is_valid(raise_exception=True)
+
+        ticket.assigned_to = serializer.validated_data["assigned_to"]
+
+        ticket.save(
+            update_fields=[
+                "assigned_to",
+                "updated_at",
+            ]
+        )
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.ASSIGNED),
+            description=(f"Ticket assigned to " f"{ticket.assigned_to}."),
+            metadata={
+                "assigned_to_id": (ticket.assigned_to_id),
+            },
+        )
+
+        create_support_notification(
+            user=ticket.assigned_to,
+            ticket=ticket,
+            template_key=("support_ticket_assigned"),
+            ticket_number=(ticket.ticket_number),
+        )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="priority",
+    )
+    @transaction.atomic
+    def priority(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+
+        serializer = TicketPrioritySerializer(data=request.data)
+
+        serializer.is_valid(raise_exception=True)
+
+        old_priority = ticket.priority
+
+        ticket.priority = serializer.validated_data["priority"]
+
+        ticket.save(
+            update_fields=[
+                "priority",
+                "updated_at",
+            ]
+        )
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.PRIORITY_CHANGED),
+            description=(
+                "Ticket priority changed "
+                f"from {old_priority} "
+                f"to {ticket.priority}."
+            ),
+            metadata={
+                "old_priority": old_priority,
+                "new_priority": (ticket.priority),
+            },
+        )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="resolve",
+    )
+    @transaction.atomic
+    def resolve(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+        if ticket.status == SupportTicket.StatusChoices.RESOLVED:
+            return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)
+
+        ticket.mark_resolved()
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.RESOLVED),
+            description="Ticket resolved.",
+        )
+
+        create_support_notification(
+            user=ticket.customer,
+            ticket=ticket,
+            template_key=("support_ticket_resolved"),
+            ticket_number=(ticket.ticket_number),
+        )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="close",
+    )
+    @transaction.atomic
+    def close(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+        if ticket.status == SupportTicket.StatusChoices.CLOSED:
+            return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)
+
+        ticket.close()
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.CLOSED),
+            description="Ticket closed.",
+        )
+
+        create_support_notification(
+            user=ticket.customer,
+            ticket=ticket,
+            template_key=("support_ticket_closed"),
+            ticket_number=(ticket.ticket_number),
+        )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reopen",
+    )
+    @transaction.atomic
+    def reopen(
+        self,
+        request,
+        pk=None,
+    ):
+        ticket = self.get_object()
+        if ticket.status == SupportTicket.StatusChoices.OPEN:
+            return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)
+
+        ticket.reopen()
+
+        TicketAuditLog.log(
+            ticket=ticket,
+            actor=request.user,
+            action=(TicketAuditLog.ActionChoices.REOPENED),
+            description="Ticket reopened.",
+        )
+
+        create_support_notification(
+            user=ticket.customer,
+            ticket=ticket,
+            template_key=("support_ticket_reopened"),
+            ticket_number=(ticket.ticket_number),
+        )
+
+        return Response(
+            self.get_serializer(ticket).data,
+            status=status.HTTP_200_OK,
+        )

@@ -1,0 +1,95 @@
+# Use behind a trusted HTTPS reverse proxy.
+# PostgreSQL and Redis are external managed services (configure in .env.production).
+# Never use compose.yaml development credentials in production.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    env_file:
+      - .env.production
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DEBUG: "False"
+      CACHE_BACKEND: redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - public_media:/app/media
+      - private_support_media:/app/private_media
+      - staticfiles:/app/static
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    networks:
+      - app_network
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    env_file:
+      - .env.production
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DEBUG: "False"
+      CACHE_BACKEND: redis
+    command: ["celery", "-A", "config", "worker", "--loglevel=INFO"]
+    restart: unless-stopped
+    volumes:
+      - public_media:/app/media
+      - private_support_media:/app/private_media
+    networks:
+      - app_network
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    env_file:
+      - .env.production
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DEBUG: "False"
+      CACHE_BACKEND: redis
+    command: ["celery", "-A", "config", "beat", "--loglevel=INFO", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    restart: unless-stopped
+    volumes:
+      - public_media:/app/media
+      - private_support_media:/app/private_media
+    networks:
+      - app_network
+    # Run exactly one beat instance; never scale celery_beat horizontally.
+
+  gateway:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./deploy/nginx/mallbyte-api.conf:/etc/nginx/conf.d/default.conf:ro
+      - public_media:/srv/mallbyte/media:ro
+      - staticfiles:/srv/mallbyte/static:ro
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/gateway-healthz"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  public_media:
+  private_support_media:
+  staticfiles:
+
+networks:
+  app_network:
+    driver: bridge
