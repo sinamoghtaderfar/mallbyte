@@ -1,0 +1,2 @@
+# Linux containers execute these files directly, including on Windows checkouts.
+*.sh text eol=lf

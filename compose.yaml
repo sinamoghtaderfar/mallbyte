@@ -1,0 +1,140 @@
+# Local development. Production uses the component deployment configurations.
+name: mallbyte-dev
+
+x-django: &django
+  image: ${COMPOSE_PROJECT_NAME:-mallbyte-dev}-django:dev
+  pull_policy: never
+  environment:
+    DJANGO_SETTINGS_MODULE: config.settings.base
+    DEBUG: "True"
+    SECRET_KEY: ${SECRET_KEY:?Run python scripts/init-dev-env.py}
+    ALLOWED_HOSTS: localhost,127.0.0.1,web
+    FRONTEND_URL: http://localhost:${FRONTEND_PORT:-3000}
+    CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_PORT:-3000}
+    CORS_ALLOW_CREDENTIALS: "True"
+    DB_NAME: mallbyte
+    DB_USER: mallbyte
+    DB_PASSWORD: ${DB_PASSWORD:?Run python scripts/init-dev-env.py}
+    DB_HOST: db
+    DB_PORT: "5432"
+    CACHE_BACKEND: redis
+    CACHE_REDIS_URL: redis://redis:6379/1
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+  volumes:
+    - ./backend/apps:/app/apps
+    - ./backend/config:/app/config
+    - public_media:/app/media
+    - private_media:/app/private_media
+  networks: [data]
+
+x-migrated: &migrated
+  migrate:
+    condition: service_completed_successfully
+  db:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mallbyte
+      POSTGRES_USER: mallbyte
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Run python scripts/init-dev-env.py}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mallbyte", "-d", "mallbyte"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    <<: *django
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    <<: *django
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    depends_on: *migrated
+    networks: [app, data]
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  celery_worker:
+    <<: *django
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency=2"]
+    depends_on: *migrated
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping --timeout=5 --destination=celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 12s
+      retries: 4
+      start_period: 30s
+
+  celery_beat:
+    <<: *django
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    depends_on: *migrated
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.production
+      target: development
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_PORT:-8000}
+      INTERNAL_API_BASE_URL: http://web:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+    command: ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+    depends_on:
+      web:
+        condition: service_healthy
+    ports: ["127.0.0.1:${FRONTEND_PORT:-3000}:3000"]
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    networks: [app]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/auth').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+networks:
+  app:
+  data:
+
+volumes:
+  postgres_data:
+  redis_data:
+  public_media:
+  private_media:

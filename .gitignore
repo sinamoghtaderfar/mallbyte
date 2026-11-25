@@ -1,0 +1,5 @@
+# Machine-local configuration, credentials and verification tools
+/.env
+/.env.*
+!/.env.example
+/.local/
