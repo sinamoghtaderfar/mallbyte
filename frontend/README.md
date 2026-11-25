@@ -1,6 +1,6 @@
 # MallByte Web
 
-MallByte is a multi-vendor marketplace. This repository is its web client: a Next.js (App Router) application that serves the customer storefront, the seller studio and the platform operations workspaces on top of the [MallByte Django REST API](https://github.com/sinamoghtaderfar/mallbyte-api).
+MallByte's Next.js web client serves the customer storefront, seller studio and platform operations workspaces. It uses the Django REST API in the same repository. See the [full-stack setup](../README.md) and the [API guide](../backend/README.md).
 
 ![Storefront home at 1440px](docs/ui-evidence/redesign/after-guest-home-1440.jpg)
 
@@ -143,13 +143,13 @@ Captured from this repository's own application. The storefront and dashboard im
 ### Prerequisites
 
 - Node.js 22 (the version used by CI and the Docker image) and npm.
-- A running [mallbyte-api](https://github.com/sinamoghtaderfar/mallbyte-api) instance for real data. Without it, public pages render their error and empty states and sign-in is unavailable.
+- A running [MallByte API](../backend/README.md) for real data and sign-in.
 
 ### Install and run
 
 ```bash
-git clone https://github.com/sinamoghtaderfar/mallbyte-web.git
-cd mallbyte-web
+# From the monorepo root
+cd frontend
 npm ci
 cp .env.example .env.local
 npm run dev
@@ -162,6 +162,7 @@ Open <http://localhost:3000>.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | Origin of the Django API. Inlined into the client bundle at build time, so it must never contain a secret. |
+| `INTERNAL_API_BASE_URL` | Browser API origin | Optional runtime origin for server-rendered CMS pages. Root Compose sets this to `http://web:8000` for container DNS. |
 
 ### Scripts
 
@@ -171,11 +172,12 @@ Open <http://localhost:3000>.
 | `npm run build` | Production build (standalone output) |
 | `npm run start` | Serve a production build |
 | `npm run lint` | ESLint |
+| `npm run typecheck` | TypeScript |
 | `npm test` / `npm run test:run` | Vitest in watch mode / single run |
 
 ## Backend integration
 
-The API lives in [sinamoghtaderfar/mallbyte-api](https://github.com/sinamoghtaderfar/mallbyte-api); follow its README to install, migrate and run it. For the web client to work against it:
+Root Compose connects both applications. To point a separately running client at the API, follow the [backend setup](../backend/README.md) and configure the following settings.
 
 1. Serve the API at the origin set in `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`).
 2. Allow the web origin (for example `http://localhost:3000`) in the API's CORS settings **with credentials**, because the refresh token travels in an httpOnly cookie and the client sends `withCredentials: true`.
@@ -188,7 +190,7 @@ All endpoint paths the client uses are collected in [`src/lib/api/endpoints.ts`]
 
 ```bash
 npm run test:run          # Vitest unit and component tests
-npx tsc --noEmit          # TypeScript type check
+npm run typecheck         # TypeScript type check
 npm run lint              # ESLint
 npm run build             # Production build
 ```
@@ -211,7 +213,7 @@ Set `CAPTURE_UI_EVIDENCE=1` to also write the deep-screen screenshots to `docs/u
 
 ### Continuous integration
 
-- `frontend-ci.yml` runs Vitest, ESLint and the production build on pushes and pull requests to `main`.
+- `frontend-ci.yml` runs Vitest, ESLint, TypeScript and the production build.
 - `browser-e2e.yml` runs the Playwright suite on pushes and pull requests to `main`.
 - `frontend-image-ci.yml` builds the non-root production image as a smoke check.
 
@@ -259,7 +261,7 @@ docs/                       Design system, production and E2E notes, UI evidence
 - **Authorisation.** The client hides what a role cannot use, but the API enforces every permission. Permission checks fail closed, and privileged accounts cannot be changed from the Super Admin Console.
 - **Sessions.** Logout in one tab ends the session in all tabs, refresh is retried once, and responses that arrive after logout or an account switch are discarded.
 - **Content.** CMS content is rendered as text and never as HTML. CMS links are restricted to internal paths or http(s) URLs, and image URLs are normalised before use.
-- **Secrets and configuration.** Only `NEXT_PUBLIC_API_BASE_URL` is read, and it is public by design. `.env*` files other than `.env.example` are git-ignored and excluded from the Docker build context. Never put a secret in a `NEXT_PUBLIC_*` variable.
+- **Secrets and configuration.** The browser receives `NEXT_PUBLIC_API_BASE_URL`. Only the Next.js server reads `INTERNAL_API_BASE_URL`. Local environment files are git-ignored and excluded from the Docker build context. Never put a secret in a `NEXT_PUBLIC_*` variable.
 - **Tests.** Browser tests use mocked API responses with `example.test` identities and fail closed on unknown requests.
 
 ## Current status and limitations

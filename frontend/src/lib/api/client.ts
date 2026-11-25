@@ -5,6 +5,7 @@ import axios, {
 } from "axios";
 
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
+import { getPublicApiBaseUrl } from "@/lib/api/origin";
 import {
   getAccessToken,
   getSessionGeneration,
@@ -14,15 +15,13 @@ import {
   setAccessToken,
 } from "@/lib/auth/session-storage";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 type SessionRequest = InternalAxiosRequestConfig & {
   _retry?: boolean;
   _sessionGeneration?: number;
   _authenticated?: boolean;
 };
 const options = {
-  baseURL: API_BASE_URL.replace(/\/$/, ""),
+  baseURL: getPublicApiBaseUrl(),
   headers: { "Content-Type": "application/json" },
   timeout: 15000,
   withCredentials: true,

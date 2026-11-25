@@ -3,10 +3,11 @@ import { notFound } from "next/navigation";
 import { SiteShell } from "@/components/layout/site-shell";
 import { PublicContentPage } from "@/features/content/components/public-content-page";
 import type { ContentPage } from "@/features/content/types";
+import { getPublicApiBaseUrl } from "@/lib/api/origin";
 
-const root = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
 type Props = { params: Promise<{ slug: string }> };
 async function getPage(slug: string): Promise<ContentPage | null> {
+  const root = process.env.INTERNAL_API_BASE_URL?.replace(/\/$/, "") || getPublicApiBaseUrl();
   const response = await fetch(`${root}/api/content/pages/${encodeURIComponent(slug)}/`, { cache: "no-store", signal: AbortSignal.timeout(12000) });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error("CMS page service unavailable");
