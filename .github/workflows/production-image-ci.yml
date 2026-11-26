@@ -48,14 +48,25 @@ jobs:
             -e CACHE_REDIS_URL=redis://localhost:6379/1 \
             mallbyte-api-production:test python manage.py check --deploy
 
-      - name: Assert critical Production cookie and database TLS settings
+      - name: Assert production safeguards with development flags present
         run: |
           docker run --rm \
             -e DJANGO_SETTINGS_MODULE=config.settings.production \
+            -e DEBUG=True \
+            -e SETTLEMENTS_ALLOW_MOCK_SUCCESS=True \
+            -e SETTLEMENTS_ALLOW_SIGNED_MOCK_EVENTS=True \
+            -e SETTLEMENTS_DEMO_ENABLED=True \
             -e SECRET_KEY \
             -e MFA_FERNET_KEY \
             -e ALLOWED_HOSTS=example.com \
             -e REDIS_URL=redis://localhost:6379/0 \
             -e CACHE_BACKEND=redis \
             -e CACHE_REDIS_URL=redis://localhost:6379/1 \
-            mallbyte-api-production:test python -c 'from django.conf import settings; assert settings.AUTH_COOKIE_SECURE; assert settings.SESSION_COOKIE_SECURE; assert settings.CSRF_COOKIE_SECURE; assert settings.DATABASES["default"]["OPTIONS"]["sslmode"] == "require"; assert settings.SECURE_SSL_REDIRECT'
+            mallbyte-api-production:test python -c '
+          from django.conf import settings
+          assert settings.AUTH_COOKIE_SECURE and settings.SESSION_COOKIE_SECURE and settings.CSRF_COOKIE_SECURE
+          assert settings.DATABASES["default"]["OPTIONS"]["sslmode"] == "require"
+          assert settings.SECURE_SSL_REDIRECT
+          assert not (settings.DEBUG or settings.SETTLEMENTS_ALLOW_MOCK_SUCCESS or settings.SETTLEMENTS_ALLOW_SIGNED_MOCK_EVENTS or settings.SETTLEMENTS_DEMO_ENABLED)
+          assert settings.CACHES["default"]["BACKEND"] == "django_redis.cache.RedisCache"
+          '
