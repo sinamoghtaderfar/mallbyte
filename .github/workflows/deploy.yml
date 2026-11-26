@@ -2,6 +2,12 @@ name: Deploy approved production release
 
 on:
   workflow_dispatch:
+    inputs:
+      authorize_deployment:
+        description: Publish images and request production deployment after verification
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -49,7 +55,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/monorepo-ci.yml
   release:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.authorize_deployment
     needs:
       - backend-ci
       - browser-e2e
