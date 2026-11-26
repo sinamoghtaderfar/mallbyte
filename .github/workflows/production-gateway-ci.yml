@@ -1,0 +1,66 @@
+name: Production runtime gateway validation
+
+on:
+  pull_request:
+    paths:
+      - 'backend/compose.*.yaml'
+      - 'backend/.env.*.example'
+      - 'backend/deploy/nginx/**'
+      - 'backend/.gitignore'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.github/workflows/production-gateway-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/compose.*.yaml'
+      - 'backend/.env.*.example'
+      - 'backend/deploy/nginx/**'
+      - 'backend/.gitignore'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.github/workflows/production-gateway-ci.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: backend
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate production and staging compose files
+        run: |
+          cp .env.production.example .env.production
+          cp .env.staging.example .env.staging
+          docker compose -f compose.production.yaml config --quiet
+          docker compose -f compose.staging.yaml config --quiet
+      - name: Verify deployment secrets are excluded from Git
+        run: |
+          git check-ignore -q .env.production
+          git check-ignore -q .env.staging
+          for template in .env.production.example .env.staging.example; do
+            if git check-ignore --no-index -q "$template"; then exit 1; fi
+          done
+      - name: Validate internal Nginx gateway configuration
+        run: |
+          docker run --rm \
+            --add-host web:127.0.0.1 \
+            -v "$PWD/deploy/nginx/mallbyte-api.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:stable-alpine nginx -t
+      - name: Prevent private media mount in gateway
+        run: |
+          for config in compose.production.yaml compose.staging.yaml; do
+            docker compose -f "$config" config --format json | jq -e '
+              all(.services.gateway.volumes[]; ([.source, .target] | join(":") | test("private_(support_)?media") | not))'
+          done
+          grep -q 'location ^~ /private_media/' deploy/nginx/mallbyte-api.conf

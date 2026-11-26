@@ -1,5 +1,6 @@
 .git
 .gitignore
+.github
 
 .venv
 __pycache__
@@ -10,9 +11,9 @@ htmlcov
 
 .env
 .env.*
-!.env.docker.example
 
 media
+static
 staticfiles
 
 .vscode

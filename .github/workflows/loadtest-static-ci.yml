@@ -2,18 +2,34 @@ name: Load test configuration validation
 
 on:
   pull_request:
+    paths:
+      - 'backend/ops/loadtest/**'
+      - '.gitattributes'
+      - '.github/workflows/loadtest-static-ci.yml'
   push:
     branches: [main]
+    paths:
+      - 'backend/ops/loadtest/**'
+      - '.gitattributes'
+      - '.github/workflows/loadtest-static-ci.yml'
+  workflow_call:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: backend
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Validate k6 script JavaScript syntax
         run: node --check ops/loadtest/catalog-smoke.js
       - name: Ensure load-test safety guard exists

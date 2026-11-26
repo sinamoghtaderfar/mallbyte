@@ -1,0 +1,161 @@
+name: Deploy approved production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorize_deployment:
+        description: Publish images and request production deployment after verification
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mallbyte-production-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  backend-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/backend-ci.yml
+  browser-e2e:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/browser-e2e.yml
+  dependency-security:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/dependency-security.yml
+  frontend-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/frontend-ci.yml
+  frontend-image-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/frontend-image-ci.yml
+  loadtest-static-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/loadtest-static-ci.yml
+  production-gateway-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/production-gateway-ci.yml
+  production-image-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/production-image-ci.yml
+  staging-recovery-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/staging-recovery-ci.yml
+  static-quality:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/static-quality.yml
+  monorepo-ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/monorepo-ci.yml
+  release:
+    if: github.ref == 'refs/heads/main' && inputs.authorize_deployment
+    needs:
+      - backend-ci
+      - browser-e2e
+      - dependency-security
+      - frontend-ci
+      - frontend-image-ci
+      - loadtest-static-ci
+      - production-gateway-ci
+      - production-image-ci
+      - staging-recovery-ci
+      - static-quality
+      - monorepo-ci
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate production configuration
+        env:
+          PUBLIC_API_ORIGIN: ${{ vars.PUBLIC_API_ORIGIN }}
+          PUBLIC_FRONTEND_ORIGIN: ${{ vars.PUBLIC_FRONTEND_ORIGIN }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          node --input-type=module - <<'JS'
+          for (const name of ["PUBLIC_API_ORIGIN", "PUBLIC_FRONTEND_ORIGIN"]) {
+            const origin = process.env[name];
+            const url = new URL(origin);
+            if (url.protocol !== "https:" || url.origin !== origin)
+              throw new Error(`${name} must be a canonical HTTPS origin`);
+          }
+          JS
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish immutable image references
+        id: publish
+        env:
+          PUBLIC_API_ORIGIN: ${{ vars.PUBLIC_API_ORIGIN }}
+        run: |
+          for app in backend frontend; do
+            image="ghcr.io/${GITHUB_REPOSITORY,,}-$app"
+            options=()
+            if [[ "$app" == frontend ]]; then
+              options+=(--build-arg "NEXT_PUBLIC_API_BASE_URL=$PUBLIC_API_ORIGIN")
+            fi
+            metadata="$RUNNER_TEMP/$app.json"
+            docker buildx build --platform linux/amd64 --file "$app/Dockerfile.production" \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --tag "$image:$GITHUB_SHA" --metadata-file "$metadata" --push "${options[@]}" "$app"
+            digest=$(jq -er '."containerimage.digest"' "$metadata")
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            echo "$app=$image@$digest" >> "$GITHUB_OUTPUT"
+            echo "- $app: \`$image@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Hand approved images to the restricted server hook
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          BACKEND_IMAGE: ${{ steps.publish.outputs.backend }}
+          FRONTEND_IMAGE: ${{ steps.publish.outputs.frontend }}
+        run: |
+          umask 077
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf -- "$ssh_dir"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ssh -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -o "UserKnownHostsFile=$ssh_dir/known_hosts" -i "$ssh_dir/key" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA $BACKEND_IMAGE $FRONTEND_IMAGE"
+      - name: Verify the public frontend and API over HTTPS
+        env:
+          PUBLIC_API_ORIGIN: ${{ vars.PUBLIC_API_ORIGIN }}
+          PUBLIC_FRONTEND_ORIGIN: ${{ vars.PUBLIC_FRONTEND_ORIGIN }}
+        run: |
+          check_url() {
+            local status
+            status=$(curl --proto '=https' --silent --show-error --retry 3 --max-time 20 \
+              --output "$2" --write-out '%{http_code}' "$1")
+            test "$status" = 200
+          }
+          check_url "$PUBLIC_FRONTEND_ORIGIN/auth" /dev/null
+          check_url "$PUBLIC_API_ORIGIN/healthz/" "$RUNNER_TEMP/release-health.json"
+          jq -e '.status == "ok"' "$RUNNER_TEMP/release-health.json"
+      - name: End registry session
+        if: always()
+        run: docker logout ghcr.io

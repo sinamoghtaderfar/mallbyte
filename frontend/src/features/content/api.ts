@@ -1,16 +1,16 @@
 import axios from "axios";
 import { apiClient } from "@/lib/api/client";
+import { getPublicApiBaseUrl } from "@/lib/api/origin";
 import type {
   CmsList, CmsRecord, CmsResource, ContentPage, FaqCategory,
   HomepageContent, NavigationMenu,
 } from "./types";
 
 export const CMS_BASE = "/api/content/";
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 /** Public editorial content never inherits an admin's Bearer token. */
 export const publicCmsClient = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: getPublicApiBaseUrl(),
   timeout: 15000,
   withCredentials: false,
 });

@@ -26,6 +26,7 @@ COPY . .
 RUN chmod +x /app/docker/entrypoint.sh \
     && addgroup --gid ${APP_GID} app \
     && adduser --disabled-password --gecos "" --uid ${APP_UID} --gid ${APP_GID} app \
+    && mkdir -p /app/media /app/private_media \
     && chown -R app:app /app
 
 USER app

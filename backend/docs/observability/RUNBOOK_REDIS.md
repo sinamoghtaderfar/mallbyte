@@ -15,7 +15,7 @@
 Only after verifying the above and following team change control:
 
 ```bash
-cd ~/projects/mallbyte-api
+cd ~/projects/mallbyte/backend
 docker compose -f compose.yaml -f compose.dev.yaml ps redis
 docker compose -f compose.yaml -f compose.dev.yaml logs --tail=100 redis
 # DANGEROUS, MANUAL ONLY, AFTER EXPLICIT HUMAN CHANGE APPROVAL:

@@ -7,15 +7,15 @@ The Django web process can request/approve an operation, but **cannot** call Doc
 ## Initial host setup (after Backend tests and migration)
 
 ```bash
-cd ~/projects/mallbyte-api
-python3 deploy/observability_ops/host_runner.py --environment development --dry-run
+cd ~/projects/mallbyte/backend
+python3 deploy/observability_ops/host_runner.py --environment monorepo --dry-run
 # Only after reviewing runbook and confirming Docker Compose works on the host:
-python3 deploy/observability_ops/install_timer.py --environment development --install
-systemctl --user status mallbyte-observability-ops.timer
+python3 deploy/observability_ops/install_timer.py --environment monorepo --install
+systemctl --user status mallbyte-observability-ops-monorepo.timer
 systemctl --user list-timers --all | grep mallbyte-observability
 ```
 
-The `systemd --user` timer checks one approved request per minute. It uses the current host user's Docker permissions: membership in the Docker group is effectively privileged. Run it only on your trusted host, under an operationally managed account. Host user managers may stop after logout; for dedicated unattended environments, deliberately configure an appropriate service/linger policy. This template targets the repo's **dev Compose files** (`compose.yaml` and `compose.dev.yaml`), **not production Kubernetes or remote Docker contexts**.
+The `monorepo` target selects the root development Compose project and its private environment file. Use `development` for the backend-only project. Both run from the `backend/` directory. The `systemd --user` timer checks for one approved request per minute. Use a managed account on the trusted Linux Docker host. Docker group membership grants host privileges. For an unattended host, configure the user manager's lifetime under the site's operations policy.
 
 ## What can be restarted
 
@@ -35,10 +35,10 @@ The `systemd --user` timer checks one approved request per minute. It uses the c
 ## Manual host-only smoke test
 
 ```bash
-cd ~/projects/mallbyte-api
-python3 deploy/observability_ops/host_runner.py --environment development --dry-run
+cd ~/projects/mallbyte/backend
+python3 deploy/observability_ops/host_runner.py --environment monorepo --dry-run
 # Only after a different admin has approved a genuine operation:
-python3 deploy/observability_ops/host_runner.py --environment development
+python3 deploy/observability_ops/host_runner.py --environment monorepo
 ```
 
 The real runner processes **one** approved operation per invocation. Do not test live restart on an important task queue without a maintenance window.
@@ -46,9 +46,9 @@ The real runner processes **one** approved operation per invocation. Do not test
 ## Shut down automation
 
 ```bash
-systemctl --user disable --now mallbyte-observability-ops.timer
+systemctl --user disable --now mallbyte-observability-ops-monorepo.timer
 # Or remove its managed service/timer files:
-python3 deploy/observability_ops/install_timer.py --environment development --uninstall
+python3 deploy/observability_ops/install_timer.py --environment monorepo --uninstall
 ```
 
 Disabling the timer does **not** revoke approved DB requests; review/cancel outstanding approvals before re-enabling. Approval expiry is enforced at claim.

@@ -70,6 +70,7 @@ class HostRunnerSafetyTests(TestCase):
         self.assertEqual(restart_commands[0][:5], ["docker", "compose", "-f", "compose.production.yaml", "restart"])
 
     def test_environment_is_explicit_and_uses_only_fixed_files(self):
+        self.assertEqual(runner.compose_command("monorepo"), ["docker", "compose", "--env-file", "../.env", "-f", "../compose.yaml"])
         self.assertEqual(runner.compose_command("staging"), ["docker", "compose", "-f", "compose.staging.yaml"])
         self.assertNotIn("compose.dev.yaml", runner.compose_command("production"))
         with patch("sys.argv", ["host_runner.py", "--dry-run"]), self.assertRaises(SystemExit):

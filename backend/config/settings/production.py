@@ -1,8 +1,19 @@
 import os
 
 from .base import *
+from .cache import build_cache_settings
 
 DEBUG = False
+
+# These values in base settings depend on the ambient development DEBUG flag.
+SETTLEMENTS_ALLOW_MOCK_SUCCESS = False
+SETTLEMENTS_ALLOW_SIGNED_MOCK_EVENTS = False
+SETTLEMENTS_DEMO_ENABLED = False
+CACHES = build_cache_settings(
+    debug=False,
+    backend=os.getenv("CACHE_BACKEND"),
+    redis_url=os.getenv("CACHE_REDIS_URL") or os.getenv("REDIS_URL"),
+)
 
 # Separate, stable Fernet key for encrypted privileged authenticator seeds.
 MFA_FERNET_KEY = os.environ["MFA_FERNET_KEY"]

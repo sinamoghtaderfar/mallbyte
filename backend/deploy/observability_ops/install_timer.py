@@ -16,7 +16,7 @@ def main():
     g=p.add_mutually_exclusive_group(required=True)
     g.add_argument('--install', action='store_true')
     g.add_argument('--uninstall', action='store_true')
-    p.add_argument('--environment', choices=['development', 'staging', 'production'], required=True)
+    p.add_argument('--environment', choices=['monorepo', 'development', 'staging', 'production'], required=True)
     o=p.parse_args()
     service = f'mallbyte-observability-ops-{o.environment}.service'
     timer = f'mallbyte-observability-ops-{o.environment}.timer'

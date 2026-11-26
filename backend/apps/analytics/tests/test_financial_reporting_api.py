@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.urls import reverse
 from django.utils import timezone
@@ -288,16 +289,19 @@ class FinancialReportingIntegrationTests(APITestCase):
             )
 
     def test_paid_at_not_payment_creation_date(self):
+        paid_at = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
         payment = self._payment(
             amount="60",
-            paid_at=timezone.now(),
+            paid_at=paid_at,
         )
 
         Payment.objects.filter(pk=payment.pk).update(
-            created_at=timezone.now() - timedelta(days=120),
+            created_at=paid_at - timedelta(days=120),
         )
 
-        responses = self._get_all({"period": "today"})
+        # Keep the event strictly inside the report's half-open daily window.
+        with patch("apps.analytics.financial.timezone.now", return_value=paid_at + timedelta(minutes=1)):
+            responses = self._get_all({"period": "today"})
 
         for financial in responses.values():
             self.assertEqual(
