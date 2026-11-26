@@ -15,6 +15,7 @@ from pathlib import Path
 SAFE_TARGETS = frozenset({"celery_worker", "celery_beat"})
 ROOT = Path(__file__).resolve().parents[2]
 ENVIRONMENTS = {
+    "monorepo": ("../compose.yaml",),
     "development": ("compose.yaml", "compose.dev.yaml"),
     "staging": ("compose.staging.yaml",),
     "production": ("compose.production.yaml",),
@@ -30,6 +31,8 @@ def call(command, *, timeout=60, input=None):
 
 def compose_command(environment):
     command = ["docker", "compose"]
+    if environment == "monorepo":
+        command.extend(["--env-file", "../.env"])
     for filename in ENVIRONMENTS[environment]:
         command.extend(["-f", filename])
     if environment == "development":
