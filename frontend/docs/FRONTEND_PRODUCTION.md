@@ -15,6 +15,13 @@ docker build -f Dockerfile.production \
 Build a distinct image for a distinct API origin. Do not reuse the
 staging image in production without rebuilding and retesting.
 
+The standalone server fetches published CMS pages at runtime. If the server
+reaches Django through a different origin, set `INTERNAL_API_BASE_URL` to an
+origin reachable from the web container. The staging Compose file forwards
+this optional setting. When it is empty, the server uses the public API origin
+compiled into the image. Include the internal hostname in Django's
+`ALLOWED_HOSTS` if you use it.
+
 Use a trusted HTTPS reverse proxy to terminate TLS and forward traffic
 to loopback-bound port 3000. If the API is on another origin, ensure
 Django CORS and cookie settings match the actual browser origins.
