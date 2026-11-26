@@ -14,7 +14,7 @@ This is a deployment **scaffold**, not a completed deployment. Do not expose it 
 
 1. Copy `.env.production.example` to `.env.production` on the deployment host.
 2. Replace all placeholders with real noncommitted secrets.
-3. Set `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS` and `CORS_ALLOWED_ORIGINS` to the exact domains in use.
+3. Set `ALLOWED_HOSTS` to the API hostnames and retain `127.0.0.1` for the container's HTTP liveness probe. Set `CSRF_TRUSTED_ORIGINS` and `CORS_ALLOWED_ORIGINS` to the exact HTTPS origins in use.
 4. Ensure only the trusted reverse proxy can reach `127.0.0.1:8000`.
 5. Persist `/app/media`, `/app/private_media`, `/app/static`; expose public media/static via an authenticated or trusted web layer as applicable. NEVER expose private_support_media directly.
 6. Set up the separate Celery worker and beat using the production image and the same environment, with only one beat scheduler.

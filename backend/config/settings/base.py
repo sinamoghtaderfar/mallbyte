@@ -20,11 +20,8 @@ from config.openapi_settings import ENUM_NAME_OVERRIDES
 
 from .cache import build_cache_settings
 
-# Load environment variables
-load_dotenv()
-
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-default-key-change-this")
@@ -283,6 +280,7 @@ OBSERVABILITY_TRUST_PROXY_HEADERS = os.getenv("OBSERVABILITY_TRUST_PROXY_HEADERS
 OBSERVABILITY_TRUSTED_PROXIES = [x.strip() for x in os.getenv("OBSERVABILITY_TRUSTED_PROXIES", "").split(",") if x.strip()]
 
 OBSERVABILITY_EXCLUDED_PATH_PREFIXES = [
+    "/healthz/",
     "/static/",
     "/media/",
     "/favicon.ico",

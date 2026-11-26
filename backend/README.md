@@ -210,7 +210,7 @@ mallbyte-api/
 
 ## Getting Started with Docker
 
-The recommended local development setup uses Docker Compose.
+For the complete storefront, API and workers, follow the [monorepo setup guide](../README.md). The commands below run the backend on its own. Run them from the `backend/` directory.
 
 The local stack includes:
 
@@ -242,8 +242,8 @@ make --version
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/sinamoghtaderfar/mallbyte-api.git
-cd mallbyte-api
+git clone https://github.com/sinamoghtaderfar/mallbyte.git
+cd mallbyte/backend
 ```
 
 ### Create the Docker Environment File
@@ -302,7 +302,7 @@ DEBUG=True
 SECRET_KEY=django-insecure-local-docker-only
 
 ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,web
-CORS_ALLOW_ALL_ORIGINS=True
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 DB_NAME=mallbyte_db
 DB_USER=mallbyte_user
@@ -314,7 +314,7 @@ REDIS_URL=redis://redis:6379/0
 CACHE_BACKEND=redis
 CACHE_REDIS_URL=redis://redis:6379/1
 CELERY_BROKER_URL=redis://redis:6379/0
-CELERY_RESULT_BACKEND=redis://redis:6379/1
+CELERY_RESULT_BACKEND=redis://redis:6379/2
 
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 DEFAULT_FROM_EMAIL=noreply@mallbyte.local

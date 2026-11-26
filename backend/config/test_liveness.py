@@ -1,10 +1,14 @@
+from unittest.mock import patch
+
 from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 
 
 class LivenessTests(SimpleTestCase):
     def test_liveness_is_public_and_contains_no_infrastructure_details(self):
-        response = self.client.get(reverse("liveness"))
+        with patch("apps.observability.services.RequestLog.objects.create") as create_log:
+            response = self.client.get(reverse("liveness"))
+        create_log.assert_not_called()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
         self.assertNotIn("database", response.content.decode().lower())
