@@ -3,18 +3,38 @@ name: Frontend production image smoke
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.gitattributes'
+      - '.github/workflows/frontend-image-ci.yml'
   push:
     branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.gitattributes'
+      - '.github/workflows/frontend-image-ci.yml'
+  workflow_call:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: frontend
 
 jobs:
   standalone-image:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate frontend staging compose
+        env:
+          NEXT_PUBLIC_API_BASE_URL: https://staging-api.example.com
+        run: docker compose -f compose.staging.yaml config --quiet
       - name: Build non-root production image
         run: |
           docker build -f Dockerfile.production \

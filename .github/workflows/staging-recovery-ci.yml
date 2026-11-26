@@ -1,0 +1,60 @@
+name: Staging and recovery scaffold validation
+
+on:
+  pull_request:
+    paths:
+      - 'backend/ops/**'
+      - 'backend/deploy/observability_ops/**'
+      - 'backend/compose.staging.yaml'
+      - 'backend/.env.staging.example'
+      - '.gitattributes'
+      - '.github/workflows/staging-recovery-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/ops/**'
+      - 'backend/deploy/observability_ops/**'
+      - 'backend/compose.staging.yaml'
+      - 'backend/.env.staging.example'
+      - '.gitattributes'
+      - '.github/workflows/staging-recovery-ci.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: backend
+
+jobs:
+  validate-ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate staging compose with dummy staging-only settings
+        run: |
+          cp .env.staging.example .env.staging
+          docker compose -f compose.staging.yaml config --quiet
+      - name: Check backup and restore shell syntax
+        run: |
+          for script in ops/postgres-{backup,restore-staging,client-check}.sh; do
+            bash -n "$script"
+          done
+      - name: Check PostgreSQL client compatibility and host runner safeguards
+        run: python3 -B -m unittest -v ops.tests.test_postgres_client_check deploy.observability_ops.test_host_runner
+      - name: Ensure production restore targets are refused
+        run: |
+          set -e
+          set +e
+          DB_HOST=localhost DB_PORT=5432 DB_USER=ignored DB_PASSWORD=ignored \
+          DB_NAME=mallbyte_production BACKUP_FILE=/tmp/not-a-backup \
+          CONFIRM_STAGING_RESTORE=RESTORE_mallbyte_production \
+          STAGING_SERVICES_STOPPED=YES bash ops/postgres-restore-staging.sh
+          status=$?
+          set -e
+          test "$status" -eq 2
