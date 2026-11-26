@@ -1,6 +1,6 @@
 """Storage for support evidence, intentionally outside public MEDIA_ROOT."""
 
-import os
+from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -21,13 +21,13 @@ class SupportAttachmentStorage(FileSystemStorage):
 
     @property
     def location(self):
-        private_root = os.path.abspath(str(self.base_location))
-        public_root = os.path.abspath(str(settings.MEDIA_ROOT))
-        if os.path.commonpath((private_root, public_root)) == public_root:
+        private_root = Path(self.base_location).resolve()
+        public_root = Path(settings.MEDIA_ROOT).resolve()
+        if private_root.is_relative_to(public_root):
             raise ImproperlyConfigured(
                 "SUPPORT_PRIVATE_MEDIA_ROOT must be outside the publicly served MEDIA_ROOT."
             )
-        return private_root
+        return str(private_root)
 
     def url(self, name):
         raise ValueError("Support attachments have no public URL.")
