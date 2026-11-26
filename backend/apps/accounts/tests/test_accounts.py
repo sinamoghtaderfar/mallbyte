@@ -10,7 +10,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from apps.accounts.cookies import get_refresh_cookie_name
 from apps.accounts.models import OTP, Address, Profile, Seller, User
-from apps.accounts.otp_delivery import mask_email, normalize_email, send_otp_email
+from apps.accounts.otp_delivery import OTPDeliveryError, mask_email, normalize_email, send_otp_email
 from apps.accounts.utils import generate_email_verification_token
 
 EMAIL_TEST_SETTINGS = {
@@ -204,6 +204,21 @@ class OTPDeliveryTestCase(APITestCase):
     def test_mask_email(self):
         self.assertEqual(mask_email("test@example.com"), "te***@example.com")
         self.assertEqual(mask_email("ab@example.com"), "a***@example.com")
+
+    @override_settings(
+        DEBUG=True,
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        EMAIL_HOST_USER="",
+        EMAIL_HOST_PASSWORD="",
+    )
+    def test_local_delivery_without_smtp_credentials(self):
+        send_otp_email(to_email="receiver@example.com", code="123456")
+        self.assertEqual(len(mail.outbox), 1)
+
+    @override_settings(DEBUG=False, EMAIL_HOST_USER="", EMAIL_HOST_PASSWORD="")
+    def test_production_delivery_requires_smtp_credentials(self):
+        with self.assertRaises(OTPDeliveryError):
+            send_otp_email(to_email="receiver@example.com", code="123456")
 
     @override_settings(**EMAIL_TEST_SETTINGS)
     def test_send_otp_email_sends_text_and_html_email(self):

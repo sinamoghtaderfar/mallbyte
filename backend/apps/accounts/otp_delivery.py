@@ -33,7 +33,17 @@ def send_otp_email(*, to_email, code, expires_in_seconds=None):
     if not to_email:
         raise OTPDeliveryError("OTP email address is required.")
 
-    if not settings.EMAIL_HOST_USER or not settings.EMAIL_HOST_PASSWORD:
+    local_delivery = settings.DEBUG and (
+        settings.EMAIL_BACKEND in {
+            "django.core.mail.backends.console.EmailBackend",
+            "django.core.mail.backends.locmem.EmailBackend",
+        }
+        or (
+            settings.EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+            and settings.EMAIL_HOST == "mailpit"
+        )
+    )
+    if not local_delivery and (not settings.EMAIL_HOST_USER or not settings.EMAIL_HOST_PASSWORD):
         raise OTPDeliveryError("Brevo SMTP credentials are not configured.")
 
     expires_in_seconds = expires_in_seconds or getattr(
