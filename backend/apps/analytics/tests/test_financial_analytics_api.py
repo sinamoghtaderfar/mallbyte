@@ -213,7 +213,8 @@ class FinancialAnalyticsAPITests(APITestCase):
     def test_refunded_payment_preserves_capture_history(self):
         self.authenticate(self.superuser)
 
-        now = timezone.now()
+        # The snapshot's upper bound is exclusive, including on coarse clocks.
+        now = timezone.now() - timedelta(seconds=1)
 
         self.create_payment(
             amount="300000",
