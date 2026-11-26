@@ -75,9 +75,28 @@ jobs:
             'from apps.content.models import ContentPage; ContentPage.objects.create(slug="ci-integration", title="Full stack CI", content="mallbyte-integration-proof", status="published")'
           curl -fsS --max-time 120 http://localhost:3000/pages/ci-integration -o "$RUNNER_TEMP/cms.html"
           grep -Fq 'mallbyte-integration-proof' "$RUNNER_TEMP/cms.html"
-      - name: Show container state on failure
+      - name: Show container state and worker startup logs on failure
         if: failure()
-        run: docker compose ps --all
+        run: |
+          docker compose ps --all
+          # Only the isolated CI worker logs are needed for startup diagnosis.
+          # Mask the generated credentials before printing any container output.
+          python3 - <<'PY'
+          import pathlib
+          import subprocess
+
+          env = dict(line.split('=', 1) for line in pathlib.Path('.env').read_text().splitlines()
+                     if line.strip() and not line.lstrip().startswith('#') and '=' in line)
+          logs = subprocess.run(
+              ['docker', 'compose', 'logs', '--no-color', '--tail', '200', 'celery_worker', 'celery_beat'],
+              capture_output=True, text=True, check=False,
+          )
+          output = logs.stdout + logs.stderr
+          for key, value in env.items():
+              if value and any(word in key.upper() for word in ('SECRET', 'PASSWORD', 'TOKEN', 'KEY')):
+                  output = output.replace(value, '[REDACTED]')
+          print(output)
+          PY
       - name: Remove temporary containers and volumes
         if: always()
         run: docker compose down --volumes --remove-orphans
