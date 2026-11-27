@@ -3,3 +3,16 @@
 /.env.*
 !/.env.example
 /.local/
+
+# Local demo credentials, media and database snapshots
+.env.demo*
+*.credentials
+/demo-credentials*/
+backups/
+*.dump
+*.dump.gz
+*.sql.gz
+*.backup
+*.sql
+marketplace-demo-media/
+/compose.override.yaml

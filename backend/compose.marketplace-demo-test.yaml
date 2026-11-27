@@ -1,0 +1,44 @@
+# Standalone. Invoke with the isolated project name and explicit -f in the runbook.
+services:
+  database:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: print_market
+      POSTGRES_HOST_AUTH_METHOD: trust
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "print_market"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  test:
+    image: ${MARKETPLACE_TEST_IMAGE:-mallbyte-dev-django:dev}
+    build: .
+    entrypoint: ["python", "manage.py"]
+    command: ["test", "apps.analytics.tests.test_marketplace_demo"]
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.base
+      DEBUG: "True"
+      DB_ENGINE: django.db.backends.postgresql
+      DB_HOST: database
+      DB_NAME: print_market
+      DB_USER: postgres
+      CACHE_BACKEND: locmem
+      EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+      MARKETPLACE_DEMO_ENV: demo
+      MARKETPLACE_DEMO_DATABASE: print_market
+      MARKETPLACE_DEMO_SELLER_PREFIX: studio+seller
+      MARKETPLACE_DEMO_SELLER_DOMAIN: example.invalid
+      MARKETPLACE_DEMO_SUPERUSER_EMAIL: operator@example.invalid
+    volumes:
+      - ./apps:/app/apps:ro
+      - ./config:/app/config:ro
+    tmpfs:
+      - /app/media:mode=1777
+networks:
+  default:
+    internal: true
