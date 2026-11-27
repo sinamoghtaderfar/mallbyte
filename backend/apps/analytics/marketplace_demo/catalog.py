@@ -1,9 +1,10 @@
 """Original print editions. Artwork is rendered offline from the catalog specification."""
 
+import hashlib
 import math
 import random
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 STUDIOS = (
     ("Alpine Fold", "Layered mountain silhouettes and high passes"),
@@ -119,3 +120,20 @@ def identity(i, banner):
     )
     draw.text((size[0] // 2, size[1] - 41), label, fill="white", anchor="mm", font_size=29)
     return art
+
+
+def category_artwork(category):
+    """Render the same collection image for fresh fixtures and older manifests."""
+    root = category.parent or category
+    parts = root.slug.split("-", 2)
+    if len(parts) != 3 or parts[0] != "mbdemo" or not parts[1].isdigit():
+        raise ValueError("Category has no demo collection identity.")
+    index = int(parts[1])
+    palette = PALETTES[(index + int(bool(category.parent_id))) % len(PALETTES)]
+    return ImageOps.fit(artwork(index, palette, category.slug), (720, 576))
+
+
+def category_image_name(category):
+    # The default ImageField limit includes the per-run storage namespace.
+    slug_key = hashlib.sha256(category.slug.encode()).hexdigest()[:20]
+    return f"category-{slug_key}"

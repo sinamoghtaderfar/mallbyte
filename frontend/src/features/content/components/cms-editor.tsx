@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Notice } from "@/components/ui/states";
 import { createCms, listCmsAll, updateCms } from "../api";
+import { CatalogTargetField } from "./catalog-target-field";
 import { recordLabel } from "../definitions";
 import type { Field, ResourceDefinition } from "../definitions";
-import { safeContentUrl, toDateTimeLocal, toIsoDateTime } from "../safety";
+import { safeBannerLink, safeContentUrl, toDateTimeLocal, toIsoDateTime } from "../safety";
 import type { CmsRecord, CmsResource } from "../types";
 import { getApiErrorMessage } from "@/lib/api/errors";
 
@@ -55,7 +56,7 @@ function inputValue(row: Record<string, unknown>, field: Field): string | number
   const raw = row[field.name];
   if (field.type === "boolean") return raw === true;
   if (field.type === "datetime") return toDateTimeLocal(raw);
-  if (field.type === "relation") return typeof raw === "number" ? String(raw) : "";
+  if (field.type === "relation" || field.type === "catalog-target") return typeof raw === "number" ? String(raw) : "";
   if (field.type === "number") return typeof raw === "number" ? raw : 0;
   return typeof raw === "string" ? raw : "";
 }
@@ -99,10 +100,11 @@ export function CmsEditor({ resource, definition, initial, onClose, onSaved, can
         const val = values[field.name];
         if (field.type === "datetime") body[field.name] = toIsoDateTime(String(val || ""));
         else if (field.type === "relation") body[field.name] = val ? Number(val) : null;
+        else if (field.type === "catalog-target") body[field.name] = targetVisible(field.name) && val ? Number(val) : null;
         else if (field.type === "number") body[field.name] = Number(val);
         else if (field.type === "boolean") body[field.name] = Boolean(val);
         else body[field.name] = val ?? "";
-        if ((field.name === "link_url") && val && !safeContentUrl(val)) {
+        if ((field.name === "link_url") && val && !(resource === "banners" ? safeBannerLink(val) : safeContentUrl(val))) {
           throw new Error("Links must use an internal /path or an http(s) URL.");
         }
       }
@@ -135,7 +137,12 @@ export function CmsEditor({ resource, definition, initial, onClose, onSaved, can
     } finally { setBusy(false); }
   }
 
-  const groups = groupFields(definition.fields);
+  function targetVisible(name: string) {
+    return values.placement === "product_detail" || (name === "category" && values.placement === "category_top");
+  }
+  const groups = groupFields(definition.fields.filter((field) =>
+    field.type !== "catalog-target" || targetVisible(field.name)));
+
   return (
     <AccessibleDialog onClose={onClose} dismissible={!busy} labelledBy="cms-editor-title" describedBy="cms-editor-desc"
       overlayClassName="fixed inset-0 z-[60] flex justify-end bg-ink/45 backdrop-blur-[2px]"
@@ -193,6 +200,12 @@ export function CmsEditor({ resource, definition, initial, onClose, onSaved, can
       control = <Textarea id={id} required={field.required} aria-describedby={described} rows={field.name === "content" || field.name === "answer" ? 10 : 3} value={String(value ?? "")} onChange={(e) => setValue(field.name, e.target.value)} />;
     } else if (field.type === "select") {
       control = <Select id={id} required={field.required} aria-describedby={described} value={String(value ?? field.choices?.[0] ?? "")} onChange={(e) => setValue(field.name, e.target.value)}>{field.choices?.map((opt) => <option key={opt} value={opt}>{opt.replaceAll("_", " ")}</option>)}</Select>;
+    } else if (field.type === "catalog-target") {
+      control = <CatalogTargetField id={id} kind={field.name === "category" ? "category" : "product"}
+        value={String(value ?? "")} onChange={(next) => {
+          setValue(field.name, next);
+          if (next) setValue(field.name === "category" ? "product" : "category", "");
+        }} />;
     } else if (field.type === "relation") {
       control = <Select id={id} required={field.required} aria-describedby={described} value={String(value ?? "")} onChange={(e) => setValue(field.name, e.target.value)}><option value="">{field.required ? "Choose an item" : "None"}</option>{(related[field.relation!] ?? []).filter((row) => !(resource === "navigation-items" && field.name === "parent" && (row.id === initial?.id || row.parent != null))).map((row) => <option key={row.id} value={row.id}>{recordLabel(field.relation!, row)} (#{row.id})</option>)}</Select>;
     } else if (field.type === "image") {

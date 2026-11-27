@@ -6,7 +6,7 @@ const headers = {
   "access-control-allow-origin": "http://127.0.0.1:3000",
   "access-control-allow-credentials": "true",
   "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-  "access-control-allow-headers": "authorization,content-type",
+  "access-control-allow-headers": "authorization,content-type,idempotency-key",
 };
 
 export const adminUser = {

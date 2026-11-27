@@ -40,7 +40,7 @@ from apps.settlements.services import (
 from apps.shipping.models import Shipment, ShipmentEvent
 from apps.support.models import SupportTicket, TicketMessage
 
-from .catalog import COLLECTIONS, FORMATS, PALETTES, STUDIOS, artwork, identity, studio_name
+from .catalog import COLLECTIONS, FORMATS, PALETTES, STUDIOS, artwork, category_artwork, category_image_name, identity, studio_name
 
 CITIES = ("Tehran", "Tabriz", "Shiraz", "Isfahan", "Rasht")
 FIRST = "Mina Arman Leila Kian Sara Navid Nika Ramin Tara Darya Kaveh Nima Roya Azin Homa".split()
@@ -218,6 +218,9 @@ class Fixture:
                     for fmt in FORMATS
                 ]
             )
+            for category in (parent, *categories[-1]):
+                file = self.inv.image(category_image_name(category), category_artwork(category))
+                Category.objects.filter(pk=category.pk).update(image=file)
         for i in range(self.n["warehouses"]):
             city = CITIES[i % len(CITIES)]
             self.warehouses.append(

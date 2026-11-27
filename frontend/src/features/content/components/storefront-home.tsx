@@ -10,10 +10,11 @@ import { ProductCard, ProductCardSkeleton } from "@/features/products/components
 import type { ProductCategory, ProductListItem } from "@/features/products/types";
 import { getImageUrl } from "@/lib/media/image-url";
 import { fetchPublicHomepage } from "../api";
-import { safeContentUrl, safeImageUrl } from "../safety";
+import { safeBannerLink, safeContentUrl } from "../safety";
+import { BannerGroup, BannerPicture, colorIfHex } from "./storefront-banners";
+import { CategoryArtwork } from "@/features/products/components/category-artwork";
 import type { ContentAnnouncement, ContentBanner, HomepageContent } from "../types";
 
-function colorIfHex(value: string | undefined, fallbackColor: string) { return value && /^#[\da-fA-F]{6}$/.test(value) ? value : fallbackColor; }
 function external(href: string) { return href.startsWith("http"); }
 
 function AnnouncementStrip({ notices }: { notices: ContentAnnouncement[] }) {
@@ -33,21 +34,19 @@ function AnnouncementStrip({ notices }: { notices: ContentAnnouncement[] }) {
 function Hero({ banner, loading, spotlight }: { banner: ContentBanner | null; loading: boolean; spotlight: ProductListItem[] }) {
   const title = banner?.title ?? "Discover better, from independent sellers.";
   const subtitle = banner?.subtitle ?? "Shop thoughtful picks from marketplace stores. Simple browsing, secure checkout and a better buying experience.";
-  const image = safeImageUrl(banner?.image);
-  const mobileImage = safeImageUrl(banner?.mobile_image);
-  const href = safeContentUrl(banner?.link_url) ?? "/products";
+  const href = banner ? (banner.is_clickable ? safeBannerLink(banner.link_url) : null) : "/products";
   const panel = colorIfHex(banner?.background_color, "#e9e4da");
   const [first, ...rest] = title.split(" ");
-  return <section className="mb-container pt-8 sm:pt-12 lg:pt-14">
+  return <section className="mb-container pt-8 sm:pt-12 lg:pt-14" data-placement="home_hero">
     <div className="grid items-stretch gap-8 lg:grid-cols-[minmax(0,1.02fr)_minmax(0,1fr)] lg:gap-14">
-      <div className="flex flex-col justify-center py-4 lg:py-10">
+      <div className="flex min-w-0 flex-col justify-center break-words py-4 lg:py-10" style={{ color: colorIfHex(banner?.text_color, "#172031") }}>
         <p className="mb-eyebrow flex items-center gap-2"><span className="size-1.5 rounded-full bg-brand" aria-hidden="true" />Welcome to MallByte</p>
         {loading && !banner
           ? <div aria-hidden="true" className="mt-6 space-y-3"><div className="mb-skeleton h-16 w-11/12" /><div className="mb-skeleton h-16 w-3/4" /></div>
-          : <h1 className="mb-display mt-6 text-[3.25rem] text-ink sm:text-[4.5rem] xl:text-[5.5rem]">{first} <span className="italic">{rest.join(" ")}</span></h1>}
-        <p className="mt-6 max-w-lg text-[1.0625rem] leading-8 text-slate-600">{subtitle}</p>
+          : <h1 className="mb-display mt-6 text-[3.25rem] sm:text-[4.5rem] xl:text-[5.5rem]">{first} <span className="italic">{rest.join(" ")}</span></h1>}
+        <p className="mt-6 max-w-lg text-[1.0625rem] leading-8">{subtitle}</p>
         <div className="mt-9 flex flex-wrap items-center gap-3">
-          {banner?.is_clickable !== false && <Link href={href} target={external(href) ? "_blank" : undefined} rel={external(href) ? "noopener noreferrer" : undefined} className={buttonStyles({ size: "large", className: "rounded-full pl-7 pr-6" })}>{banner?.cta_text || "Explore products"}<ArrowRight size={18} aria-hidden="true" /></Link>}
+          {href && <Link href={href} target={external(href) ? "_blank" : undefined} rel={external(href) ? "noopener noreferrer" : undefined} className={buttonStyles({ size: "large", className: "rounded-full pl-7 pr-6" })}>{banner?.cta_text || "Explore products"}<ArrowRight size={18} aria-hidden="true" /></Link>}
           <Link href="#categories" className={buttonStyles({ variant: "secondary", size: "large", className: "rounded-full" })}>Shop by category</Link>
         </div>
         <dl className="mt-12 grid max-w-lg grid-cols-3 gap-6 border-t border-line pt-6 text-sm">
@@ -55,8 +54,8 @@ function Hero({ banner, loading, spotlight }: { banner: ContentBanner | null; lo
         </dl>
       </div>
       <div className="relative isolate min-h-[22rem] overflow-hidden rounded-[1.75rem] sm:min-h-[30rem]" style={{ backgroundColor: panel }}>
-        {image && <picture className="absolute inset-0 -z-10"><source media="(max-width: 640px)" srcSet={mobileImage ?? image} /><img src={image} alt="" fetchPriority="high" className="size-full object-cover" /></picture>}
-        {!image && !loading && <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_30%_20%,#fff_0,transparent_55%)]" />}
+        {banner ? <div className="absolute inset-0 -z-10"><BannerPicture key={banner.id} banner={banner} eager /></div>
+          : !loading && <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_30%_20%,#fff_0,transparent_55%)]" />}
         {spotlight.length > 0 && <div className="absolute inset-x-4 bottom-4 hidden gap-2 sm:grid sm:left-auto sm:right-5 sm:bottom-5 sm:w-80">
           {spotlight.slice(0, 2).map((product) => {
             const img = getImageUrl(product.main_image);
@@ -124,14 +123,16 @@ export function StorefrontHome() {
   }, []);
   const hero = data?.banners.find((b) => b.placement === "home_hero" && b.is_visible) ?? null;
   const notices = data?.announcements.filter((a) => a.is_visible) ?? [];
-  const secondaryBanners = data?.banners.filter((b) => b.is_visible && b.id !== hero?.id).slice(0, 4) ?? [];
+  const banners = data?.banners ?? [];
   const pages = data?.featured_pages.filter((p) => p.is_visible) ?? [];
   const faqs = data?.featured_faqs ?? [];
   const loadingContent = !data && !error;
 
   return <main className="pb-24">
     <AnnouncementStrip notices={notices} />
+    <BannerGroup placement="global" banners={banners} className="mb-container pt-4" />
     <Hero banner={hero} loading={loadingContent} spotlight={featured.items} />
+    <BannerGroup placement="home_top" banners={banners} className="mb-container mt-10" />
 
     <section aria-label="Why shop on MallByte" className="mb-container mt-16">
       <ul className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-line bg-line lg:grid-cols-4">
@@ -154,9 +155,8 @@ export function StorefrontHome() {
           ? Array.from({ length: 8 }, (_, i) => <div key={i} className="mb-skeleton aspect-[5/4] rounded-2xl" aria-hidden="true" />)
           : categories.slice(0, 9).map((category, index, shown) => {
             const feature = index === 0 && (shown.length === 5 || shown.length === 9);
-            const img = getImageUrl(category.image);
             return <Link key={category.id} href={`/products?category=${category.id}`} className={`group relative isolate flex aspect-[5/4] flex-col justify-end overflow-hidden rounded-2xl bg-sunken p-4 sm:p-5 ${feature ? "md:col-span-2 md:row-span-2 md:aspect-auto" : ""}`}>
-              {img && <img src={img} alt="" loading="lazy" className="absolute inset-0 -z-10 size-full object-cover transition-transform duration-700 group-hover:scale-105" />}
+              <CategoryArtwork image={category.image} />
               <span className="absolute inset-0 -z-10 bg-gradient-to-t from-black/45 via-black/5 to-transparent" aria-hidden="true" />
               <span className="flex items-end justify-between gap-2 text-white">
                 <span className={`font-medium leading-tight tracking-tight ${feature ? "mb-display text-[2rem] sm:text-[2.5rem]" : "text-[0.9375rem] sm:text-base"}`}>{category.name}</span>
@@ -172,21 +172,7 @@ export function StorefrontHome() {
       <ProductRail {...featured} products={featured.items} count={4} />
     </section>}
 
-    {secondaryBanners.length > 0 && <section aria-label="From our marketplace" className="mb-container mt-24 grid gap-4 md:grid-cols-2">
-      {secondaryBanners.map((banner) => {
-        const img = safeImageUrl(banner.image); const href = safeContentUrl(banner.link_url) ?? "/products";
-        const body = <>
-          <div className="relative aspect-[16/11] overflow-hidden rounded-2xl" style={{ backgroundColor: colorIfHex(banner.background_color, "#e9e4da") }}>{img && <img src={img} alt={banner.title} loading="lazy" className="size-full object-cover transition-transform duration-700 group-hover:scale-[1.03]" />}</div>
-          <div className="flex items-end justify-between gap-4 pt-5">
-            <div className="min-w-0"><h3 className="mb-display text-[1.875rem] text-ink">{banner.title}</h3>{banner.subtitle && <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted">{banner.subtitle}</p>}</div>
-            {banner.is_clickable && <span className={buttonStyles({ variant: "secondary", size: "small", className: "shrink-0 rounded-full" })}>{banner.cta_text || "Explore"}<ArrowRight size={15} aria-hidden="true" /></span>}
-          </div>
-        </>;
-        return banner.is_clickable
-          ? <Link key={banner.id} href={href} target={external(href) ? "_blank" : undefined} rel={external(href) ? "noopener noreferrer" : undefined} className="group block rounded-2xl">{body}</Link>
-          : <div key={banner.id}>{body}</div>;
-      })}
-    </section>}
+    <BannerGroup placement="home_middle" banners={banners} className="mb-container mt-24" />
 
     <section aria-labelledby="arrivals-heading" className="mb-container mt-24">
       <SectionHeading eyebrow="Just in" title={<>New <span className="italic">arrivals</span></>} id="arrivals-heading" action={<ViewAll href="/products?ordering=-created_at">See what&apos;s new</ViewAll>} />

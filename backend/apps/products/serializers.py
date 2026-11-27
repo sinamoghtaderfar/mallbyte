@@ -3,6 +3,8 @@ from functools import wraps
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
+from apps.content.validators import validate_image_upload
+
 from .models import (
     Attribute,
     AttributeValue,
@@ -40,6 +42,8 @@ def validate_compare_price(attrs, instance):
 class CategorySerializer(serializers.ModelSerializer):
     """Serializer for Category model"""
     
+    # Match the model default for both JSON and HTML-style multipart input.
+    is_active = serializers.BooleanField(default=True)
     children = serializers.SerializerMethodField()
     parent_name = serializers.ReadOnlyField(source='parent.name')
     
@@ -49,7 +53,13 @@ class CategorySerializer(serializers.ModelSerializer):
                   'description', 'image', 'is_active', 'order', 'created_at']
         read_only_fields = ['id', 'slug', 'created_at']
     
+    def validate_image(self, value):
+        return validate_image_upload(value)
+
     def get_children(self, obj):
+        if self.context.get("flat_categories"):
+            return []
+
         ancestors = self.context.get("category_ancestors", set())
         if obj.pk in ancestors:
             return []

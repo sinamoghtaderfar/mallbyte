@@ -57,6 +57,7 @@ const sections: SegmentItem<Tab>[] = [
 ];
 
 const integrations = [
+  { href: "/admin/categories", title: "Product categories", desc: "Manage categories and their images", Icon: Boxes },
   { href: "/admin/sellers", title: "Sellers", desc: "Applications and seller verification", Icon: Store },
   { href: "/support", title: "Support", desc: "Tickets and agent workflows", Icon: HeartHandshake },
   { href: "/admin/orders", title: "Orders", desc: "Customer orders and fulfillment", Icon: ClipboardList },

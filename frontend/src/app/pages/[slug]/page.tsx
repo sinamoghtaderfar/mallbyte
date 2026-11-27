@@ -24,5 +24,5 @@ export default async function CmsPage({ params }: Props) {
   const { slug } = await params;
   const page = await getPage(slug);
   if (!page) notFound();
-  return <SiteShell><PublicContentPage page={page}/></SiteShell>;
+  return <SiteShell promotions><PublicContentPage page={page}/></SiteShell>;
 }

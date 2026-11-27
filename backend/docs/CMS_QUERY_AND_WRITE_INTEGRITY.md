@@ -1,5 +1,7 @@
 # CMS query and write integrity
 
+See the [storefront CMS runbook](../../docs/cms-storefront.md) for placement, targeting, category media and verified demo backfill.
+
 This patch depends on the repository quality PR (which in turn depends on observability quality). It fixes the CMS portions of audit findings 26, 29 and 42 and closes a publication-state race found during the final bounded QA pass.
 
 FAQ/category and navigation-item/menu numeric query filters now validate positive signed-64-bit IDs and return field-specific HTTP 400 errors for malformed, fractional, negative or overflowing values. Existing valid filters and response envelopes remain compatible.

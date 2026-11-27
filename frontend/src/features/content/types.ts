@@ -13,7 +13,7 @@ export type ContentBanner = CmsRecord & Publishable & {
   title: string; subtitle: string; image: string; mobile_image: string | null;
   placement: "home_hero" | "home_top" | "home_middle" | "category_top" | "product_detail" | "checkout" | "global";
   cta_text: string; link_url: string; background_color: string; text_color: string;
-  is_clickable: boolean; order: number;
+  is_clickable: boolean; order: number; category?: number | null; product?: number | null;
 };
 export type FaqItem = CmsRecord & { category: number; category_name: string; question: string; answer: string; is_active: boolean; is_featured: boolean; order: number };
 export type FaqCategory = CmsRecord & { name: string; slug: string; description: string; is_active: boolean; order: number; items: FaqItem[] };
