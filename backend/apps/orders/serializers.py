@@ -23,6 +23,7 @@ from apps.orders.models import (
 )
 from apps.orders.services import create_order_notification
 from apps.products.models import Product
+from apps.products.querysets import product_image_urls, product_images_prefetch
 from apps.rbac.commerce import can_view_all
 
 # ============================================================
@@ -30,7 +31,24 @@ from apps.rbac.commerce import can_view_all
 # ============================================================
 
 
-class CartItemSerializer(serializers.ModelSerializer):
+class ProductLineImages(serializers.Serializer):
+    product_image = serializers.SerializerMethodField()
+    product_image_fallbacks = serializers.SerializerMethodField()
+
+    def image_urls(self, obj):
+        product = obj.product
+        if not product.is_active or product.status != Product.StatusChoices.APPROVED:
+            return []
+        return product_image_urls(product)
+
+    def get_product_image(self, obj) -> str | None:
+        return next(iter(self.image_urls(obj)), None)
+
+    def get_product_image_fallbacks(self, obj) -> list[str]:
+        return self.image_urls(obj)[1:]
+
+
+class CartItemSerializer(ProductLineImages, serializers.ModelSerializer):
     """
     Shows one item inside the cart.
     Example: Product A x 2
@@ -58,6 +76,8 @@ class CartItemSerializer(serializers.ModelSerializer):
             "product",
             "product_name",
             "product_sku",
+            "product_image",
+            "product_image_fallbacks",
             "product_price",
             "available_stock",
             "quantity",
@@ -96,7 +116,9 @@ class CartSerializer(serializers.ModelSerializer):
         available = Stock.objects.filter(product_id=OuterRef("product_id"), warehouse__is_active=True).order_by().values("product_id").annotate(
             value=Sum(F("quantity") - F("reserved_quantity")),
         ).values("value")
-        items = CartItem.objects.select_related("product").annotate(
+        items = CartItem.objects.select_related("product").prefetch_related(
+            product_images_prefetch("product__", include_fallbacks=True),
+        ).annotate(
             _cart_available_stock=Coalesce(Subquery(available, output_field=IntegerField()), 0),
         )
         prefetch_related_objects([instance], Prefetch("items", queryset=items))
@@ -206,7 +228,7 @@ class UpdateCartItemSerializer(serializers.Serializer):
 # ============================================================
 
 
-class OrderItemSerializer(serializers.ModelSerializer):
+class OrderItemSerializer(ProductLineImages, serializers.ModelSerializer):
     """
     Shows one item inside an order.
     """
@@ -226,6 +248,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "warehouse_name",
             "product_name",
             "product_sku",
+            "product_image",
+            "product_image_fallbacks",
             "quantity",
             "unit_price",
             "total_price",
@@ -310,6 +334,13 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     """
     Full order details with items and status history.
     """
+
+    def to_representation(self, instance):
+        items = OrderItem.objects.select_related("product", "warehouse").prefetch_related(
+            product_images_prefetch("product__", include_fallbacks=True),
+        )
+        prefetch_related_objects([instance], Prefetch("items", queryset=items))
+        return super().to_representation(instance)
 
     def get_fields(self):
         fields = super().get_fields()

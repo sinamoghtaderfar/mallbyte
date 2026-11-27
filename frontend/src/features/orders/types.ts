@@ -19,6 +19,8 @@ export type OrderItem = {
   warehouse_name: string;
   product_name: string;
   product_sku: string;
+  product_image?: string | null;
+  product_image_fallbacks?: string[];
   quantity: number;
   unit_price: string;
   total_price: string;

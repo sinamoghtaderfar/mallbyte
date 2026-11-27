@@ -8,7 +8,8 @@ const banner = (placement: string, title = placement) => ({
   status: "published", is_visible: true, is_clickable: true, link_url: "/products",
   cta_text: "Shop prints", order: 0,
 });
-const category = { id: 27, name: "Mountain editions", slug: "mountains", parent: null, image, children: [], is_active: true };
+const child = { id: 28, name: "Postcard sets", slug: "mountain-postcards", parent: 27, image, children: [], is_active: true };
+const category = { id: 27, name: "Mountain editions", slug: "mountains", parent: null, image, children: [child], is_active: true };
 const empty = { count: 0, results: [], next: null, previous: null };
 
 test.beforeEach(async ({ page }) => {
@@ -32,6 +33,7 @@ test("homepage slots and selected category stay correct on desktop, tablet and m
     },
     "/api/products/categories/": async route => fulfillJson(route, { ...empty, count: 1, results: [category] }),
     "/api/products/categories/27/": async route => fulfillJson(route, category),
+    "/api/products/categories/28/": async route => fulfillJson(route, child),
     "/api/products/products/": async route => fulfillJson(route, empty),
     "/api/products/brands/": async route => fulfillJson(route, empty),
     "/api/content/navigation/": async route => fulfillJson(route, empty),
@@ -49,7 +51,12 @@ test("homepage slots and selected category stay correct on desktop, tablet and m
     await card.click();
     await expect(page).toHaveURL(/category=27/);
     await expect(page.locator('[data-placement="category_top"]')).toContainText("category_top");
-    await expect(page.getByRole("region", { name: "Selected category" }).locator("img")).toBeVisible();
+    const selected = page.getByRole("region", { name: "Selected category" });
+    await expect(selected.locator("img")).toBeVisible();
+    await selected.getByRole("link", { name: child.name }).click();
+    await expect(page).toHaveURL(/category=28/);
+    await expect(selected.getByRole("heading", { name: child.name })).toBeVisible();
+    await expect(page.locator('[data-placement="category_top"]')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   }
 });

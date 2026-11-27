@@ -17,6 +17,7 @@ from .models import (
     Tag,
     Wishlist,
 )
+from .querysets import product_image_url
 
 
 def catalog_write(func):
@@ -167,12 +168,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         return [labels_map.get(label, label) for label in (obj.labels or [])]
 
     def get_main_image(self, obj):
-        # Public listing querysets prefetch main images to avoid a query per product.
-        if hasattr(obj, "_catalog_main_images"):
-            image = next(iter(obj._catalog_main_images), None)
-        else:
-            image = obj.images.filter(is_main=True).first()
-        return image.image.url if image else None
+        return product_image_url(obj)
 
 
 class ProductVariantSerializer(serializers.ModelSerializer):
@@ -403,7 +399,7 @@ class WishlistSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
     
     def get_product_image(self, obj):
-        return ProductListSerializer().get_main_image(obj.product)
+        return product_image_url(obj.product)
     
 class RecentlyViewedSerializer(serializers.ModelSerializer):
     product_name = serializers.ReadOnlyField(source="product.name")
@@ -416,4 +412,4 @@ class RecentlyViewedSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'viewed_at']
         
     def get_product_image(self, obj):
-        return ProductListSerializer().get_main_image(obj.product)
+        return product_image_url(obj.product)

@@ -207,7 +207,6 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.annotate(_items_count=Count("items"))
         else:
             queryset = queryset.prefetch_related(
-                Prefetch("items", queryset=OrderItem.objects.select_related("product", "warehouse")),
                 "status_history__changed_by",
             )
 

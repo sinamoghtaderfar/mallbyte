@@ -238,6 +238,39 @@ describe("ProductList", () => {
     expect(within(screen.getByRole("navigation", { name: "Product pagination" })).getByText(/Page 1 of/)).toBeInTheDocument();
   });
 
+  it("keeps a parent category in the URL across pages and switches to a selected child", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/products?category=1");
+    const parent = filterOptions.categories.results[0];
+    mockedGetProductFilters.mockResolvedValue({ ...filterOptions, categories: {
+      ...filterOptions.categories,
+      results: [{ ...parent, children: [{ ...parent, id: 11, name: "Keyboards", parent: 1 }] }],
+    } });
+    mockedGetProducts.mockImplementation(async (params = {}) => {
+      if (params.category === "11") return makeResponse([makeProduct({ name: "Keyboard subcategory only" })]);
+      return {
+        count: 25,
+        next: params.page === "2" ? null : "/api/products/products/?category=1&page=2",
+        previous: params.page === "2" ? "/api/products/products/?category=1" : null,
+        results: [makeProduct({ name: params.page === "2" ? "Second descendant" : "First descendant" })],
+      };
+    });
+
+    render(<ProductList />);
+    expect(await screen.findByText("First descendant")).toBeInTheDocument();
+    expect(screen.getByText("25 products found")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("Second descendant")).toBeInTheDocument();
+    expect(new URLSearchParams(window.location.search).get("category")).toBe("1");
+    expect(mockedGetProducts).toHaveBeenLastCalledWith({ category: "1", page: "2" });
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /^category$/i }), "11");
+    await user.click(screen.getByRole("button", { name: /apply filters/i }));
+    expect(await screen.findByText("Keyboard subcategory only")).toBeInTheDocument();
+    expect(mockedGetProducts).toHaveBeenLastCalledWith({ category: "11" });
+    expect(new URLSearchParams(window.location.search).get("page")).toBeNull();
+  });
+
   it("rejects an inverted price range without making a catalog request", async () => {
     const user = userEvent.setup();
     mockedGetProducts.mockResolvedValue(makeResponse([makeProduct()]));
