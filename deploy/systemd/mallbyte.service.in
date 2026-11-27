@@ -1,0 +1,19 @@
+[Unit]
+Description=Mallbyte @ENVIRONMENT@ boot recovery
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+RequiresMountsFor="@ROOT@"
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart="@PYTHON@" -B "@ROOT@/scripts/mallbyte-server.py" boot --environment @ENVIRONMENT@ --project @PROJECT@ --snapshot-timeout @SNAPSHOT_TIMEOUT@
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+RemainAfterExit=yes
+TimeoutStartSec=45min
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

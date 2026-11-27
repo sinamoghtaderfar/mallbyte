@@ -75,3 +75,12 @@ class HostRunnerSafetyTests(TestCase):
         self.assertNotIn("compose.dev.yaml", runner.compose_command("production"))
         with patch("sys.argv", ["host_runner.py", "--dry-run"]), self.assertRaises(SystemExit):
             runner.main()
+
+    def test_managed_runner_rejects_a_container_from_another_checkout(self):
+        compose = ["docker", "compose", "--project-directory", "/managed", "-f", "/managed/compose.yaml"]
+        responses = [SimpleNamespace(returncode=0, stdout="fixture-id\n"),
+                     SimpleNamespace(returncode=0, stdout="/different|/different/compose.yaml\n")]
+        with patch.object(runner, "call", side_effect=responses) as call:
+            self.assertFalse(runner.managed_web_ready(compose))
+        self.assertEqual(call.call_count, 2)
+        self.assertNotIn("exec", call.call_args.args[0])
