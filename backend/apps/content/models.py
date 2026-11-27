@@ -169,6 +169,13 @@ class Banner(TimeStampedModel, PublishableModel):
         CHECKOUT = "checkout", "Checkout"
         GLOBAL = "global", "Global"
 
+    category = models.ForeignKey(
+        "products.Category", null=True, blank=True, on_delete=models.PROTECT, related_name="cms_banners",
+    )
+    product = models.ForeignKey(
+        "products.Product", null=True, blank=True, on_delete=models.PROTECT, related_name="cms_banners",
+    )
+
     title = models.CharField(max_length=255)
     subtitle = models.TextField(blank=True)
 

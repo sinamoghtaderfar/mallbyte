@@ -7,7 +7,8 @@ from functools import wraps
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch, Q
+from django.db.models import F, Prefetch, Q, Window
+from django.db.models.functions import RowNumber
 from django.utils import timezone
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -38,6 +39,7 @@ from apps.content.serializers import (
 from apps.content.validators import validate_publication_window
 from apps.content.visibility import can_view_unpublished, visible_nav_items
 from apps.observability.models import AuditLog
+from apps.products.models import Category, Product
 
 
 def cms_write(func):
@@ -211,6 +213,42 @@ class BannerViewSet(PublishableCMSViewSet):
             qs = qs.filter(status=status_filter)
         return qs.order_by("placement", "order", "-created_at")
 
+    def get_permissions(self):
+        return [AllowAny()] if self.action == "storefront" else super().get_permissions()
+
+    @action(detail=False, authentication_classes=[])
+    def storefront(self, request):
+        """Resolve one public placement without inheriting editorial privileges."""
+        placement = serializers.ChoiceField(choices=Banner.PlacementChoices.values).run_validation(
+            request.query_params.get("placement"),
+        )
+        banners = visible_now_queryset(Banner.objects.filter(placement=placement))
+        general = banners.filter(category__isnull=True, product__isnull=True)
+        candidates = []
+        if placement == Banner.PlacementChoices.CATEGORY_TOP:
+            category = numeric_query_param(request, "category")
+            if not category or not Category.objects.filter(pk=category, is_active=True).exists():
+                general = banners.none()
+            else:
+                candidates.append(banners.filter(category_id=category, product__isnull=True))
+        elif placement == Banner.PlacementChoices.PRODUCT_DETAIL:
+            product = Product.objects.filter(
+                pk=numeric_query_param(request, "product"), is_active=True, status=Product.StatusChoices.APPROVED,
+            ).values("category_id", "category__is_active").first()
+            if product is None:
+                general = banners.none()
+            else:
+                candidates.append(banners.filter(product_id=request.query_params["product"], category__isnull=True))
+                if product["category__is_active"]:
+                    candidates.append(banners.filter(category_id=product["category_id"], product__isnull=True))
+        for queryset in [*candidates, general]:
+            selected = list(queryset.order_by("order", "-created_at", "pk")[:banner_limit()])
+            if selected:
+                break
+        response = Response(self.get_serializer(selected, many=True).data)
+        response["Cache-Control"] = "private, no-store"
+        return response
+
 
 class FAQCategoryViewSet(CMSViewSet):
     serializer_class = FAQCategorySerializer
@@ -305,6 +343,10 @@ class NavigationItemViewSet(CMSViewSet):
         return qs.order_by("menu__order", "parent_id", "order", "label")
 
 
+def banner_limit():
+    return max(1, min(int(getattr(settings, "CMS_HOMEPAGE_ITEM_LIMIT", 20)), 100))
+
+
 class HomepageContentView(APIView):
     permission_classes = [AllowAny]
 
@@ -312,7 +354,10 @@ class HomepageContentView(APIView):
         banners = visible_now_queryset(Banner.objects.filter(placement__in=[
             Banner.PlacementChoices.HOME_HERO, Banner.PlacementChoices.HOME_TOP,
             Banner.PlacementChoices.HOME_MIDDLE, Banner.PlacementChoices.GLOBAL,
-        ])).order_by("placement", "order", "-created_at")
+        ], category__isnull=True, product__isnull=True)).annotate(slot_rank=Window(
+            expression=RowNumber(), partition_by=[F("placement")],
+            order_by=[F("order").asc(), F("created_at").desc(), F("pk").asc()],
+        )).filter(slot_rank__lte=banner_limit()).order_by("placement", "order", "-created_at", "pk")
         announcements = visible_now_queryset(Announcement.objects.filter(placement__in=[
             Announcement.PlacementChoices.GLOBAL, Announcement.PlacementChoices.HOME,
         ])).order_by("order", "-created_at")
@@ -324,7 +369,7 @@ class HomepageContentView(APIView):
         ).order_by("category__order", "order", "question")
         limit = max(1, min(int(getattr(settings, "CMS_HOMEPAGE_ITEM_LIMIT", 20)), 100))
         response = Response({
-            "banners": BannerSerializer(banners[:limit], many=True, context={"request": request}).data,
+            "banners": BannerSerializer(banners, many=True, context={"request": request}).data,
             "announcements": AnnouncementSerializer(
                 announcements[:limit], many=True, context={"request": request}
             ).data,

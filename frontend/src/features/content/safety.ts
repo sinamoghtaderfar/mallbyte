@@ -10,7 +10,10 @@ export function safeContentUrl(value: unknown): string | null {
   } catch { return null; }
 }
 export function safeImageUrl(value: unknown): string | null {
-  return safeContentUrl(value);
+  const href = safeContentUrl(value);
+  if (!href || href.startsWith("/")) return href;
+  const url = new URL(href);
+  return !url.username && !url.password ? href : null;
 }
 export function toDateTimeLocal(value: unknown): string {
   if (typeof value !== "string" || !value) return "";
@@ -27,4 +30,11 @@ export function toIsoDateTime(value: string): string | null {
 export function summarizeText(value: unknown, max = 95): string {
   const t = String(value ?? "").replace(/\s+/g, " ").trim();
   return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+export function safeBannerLink(value: unknown): string | null {
+  const href = safeContentUrl(value);
+  if (!href || href.startsWith("/")) return href;
+  const url = new URL(href);
+  return url.protocol === "https:" && !url.username && !url.password && !url.hash ? href : null;
 }

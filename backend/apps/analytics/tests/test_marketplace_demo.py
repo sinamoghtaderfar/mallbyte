@@ -5,7 +5,7 @@ import secrets
 import tempfile
 from datetime import date
 from decimal import Decimal
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -153,6 +153,7 @@ class MarketplaceDemoTests(TestCase):
                 f.seek(0)
                 Image.open(f).verify()
         self.assertEqual(len(hashes), 500)
+        self.assertEqual(Category.objects.exclude(image__isnull=True).exclude(image="").count(), 60)
         stores = list(Seller.objects.order_by("pk"))
         for i, store in enumerate(stores):
             owned = set(Product.objects.filter(seller=store.user).values_list("pk", flat=True))
@@ -325,6 +326,46 @@ class MarketplaceDemoTests(TestCase):
             self.command(cleanup=True)
         self.command(**options)
         self.assertEqual(snapshot(), original)
+
+    def test_category_images_and_backfill_preserve_existing_dataset(self):
+        self.command(**SMALL)
+        owned = Category.objects.order_by("pk")
+        authored, legacy = owned[:2]
+        files = MarketplaceDemoRun.objects.get(pk=1).files
+        self.assertEqual(owned.count(), 9)
+        self.assertTrue(all(category.image.name in files for category in owned))
+        manual = default_storage.save("categories/handpicked.png", BytesIO(b"operator media"))
+        Category.objects.filter(pk=authored.pk).update(image=manual)
+        Category.objects.filter(pk=legacy.pk).update(image=None)
+        outsider = Category.objects.create(name="Independent catalog category")
+        counts = (Product.objects.count(), Seller.objects.count(), User.objects.count(), Order.objects.count())
+        original = Path(default_storage.path(legacy.image.name)).read_bytes()
+
+        def backfill(*flags):
+            output = StringIO()
+            call_command("backfill_marketplace_demo_category_images", *flags, stdout=output)
+            return json.loads(output.getvalue())
+
+        dry = backfill("--dry-run")
+        self.assertEqual((dry["created"], dry["would_create"], dry["skipped"], dry["failed"]), (0, 1, 8, 0))
+        self.assertEqual(MarketplaceDemoRun.objects.get(pk=1).files, files)
+        self.assertEqual(backfill()["created"], 1)
+        self.assertEqual(backfill()["skipped"], 9)
+        authored.refresh_from_db()
+        legacy.refresh_from_db()
+        outsider.refresh_from_db()
+        self.assertEqual(authored.image.name, manual)
+        self.assertFalse(outsider.image)
+        self.assertEqual(Path(default_storage.path(legacy.image.name)).read_bytes(), original)
+        self.assertIn(legacy.image.name, MarketplaceDemoRun.objects.get(pk=1).files)
+        self.assertEqual((Product.objects.count(), Seller.objects.count(), User.objects.count(), Order.objects.count()), counts)
+        with self.settings(DEBUG=False), self.assertRaises(CommandError):
+            backfill("--dry-run")
+        with self.captureOnCommitCallbacks(execute=True):
+            self.command(cleanup=True)
+        self.assertFalse(default_storage.exists(legacy.image.name))
+        self.assertTrue(default_storage.exists(manual))
+        self.assertTrue(Category.objects.filter(pk=outsider.pk).exists())
 
     def test_production_and_identity_guards(self):
         for variables in (

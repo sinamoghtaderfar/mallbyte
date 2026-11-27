@@ -4,7 +4,7 @@ import { CartPanel } from "@/features/cart/components/cart-panel";
 
 export default function CartPage() {
   return (
-    <SiteShell>
+    <SiteShell promotions>
       <main className="px-4 py-12">
         <div className="mx-auto w-full max-w-6xl">
           <ProtectedRoute>

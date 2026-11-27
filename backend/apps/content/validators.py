@@ -4,6 +4,7 @@ Text fields are plain text/Markdown sources, NOT trusted raw HTML.
 The frontend must render them as escaped text or sanitized Markdown.
 """
 import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from rest_framework import serializers
@@ -48,7 +49,11 @@ def validate_image_upload(value):
         return value
     if value.size > MAX_IMAGE_BYTES:
         raise serializers.ValidationError("Maximum image upload size is 8 MB.")
-    # DRF's ImageField validates image encoding with Pillow.
+    # Pillow verifies encoding before this validator runs. Require a matching
+    # raster extension so file servers also send the intended media type.
+    formats = {"JPEG": {".jpg", ".jpeg"}, "PNG": {".png"}, "WEBP": {".webp"}}
+    if Path(value.name).suffix.lower() not in formats.get(value.image.format, set()):
+        raise serializers.ValidationError("Upload a JPEG, PNG or WebP with a matching file extension.")
     return value
 
 

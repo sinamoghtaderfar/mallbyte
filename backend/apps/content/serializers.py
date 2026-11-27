@@ -65,11 +65,22 @@ class BannerSerializer(PublicationSerializerMixin, serializers.ModelSerializer):
         model = Banner
         fields = [
             "id", "title", "subtitle", "image", "mobile_image", "placement",
-            "cta_text", "link_url", "background_color", "text_color", "order",
+            "cta_text", "link_url", "background_color", "text_color", "order", "category", "product",
             "is_clickable", "status", "published_at", "starts_at", "ends_at",
             "is_visible", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "status", "published_at", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        placement = attrs.get("placement", getattr(self.instance, "placement", Banner.PlacementChoices.HOME_HERO))
+        category = attrs.get("category", getattr(self.instance, "category_id", None))
+        product = attrs.get("product", getattr(self.instance, "product_id", None))
+        if category and placement not in {Banner.PlacementChoices.CATEGORY_TOP, Banner.PlacementChoices.PRODUCT_DETAIL}:
+            raise serializers.ValidationError({"category": "Choose a category or product detail placement."})
+        if product and (category or placement != Banner.PlacementChoices.PRODUCT_DETAIL):
+            raise serializers.ValidationError({"product": "A product target requires product detail placement and no category target."})
+        return attrs
 
     def get_is_visible(self, obj):
         return obj.is_visible_now()

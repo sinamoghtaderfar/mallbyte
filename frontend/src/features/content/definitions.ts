@@ -1,6 +1,6 @@
 import type { CmsRecord, CmsResource } from "./types";
 
-export type FieldType = "text" | "textarea" | "select" | "number" | "boolean" | "datetime" | "image" | "relation" | "color";
+export type FieldType = "text" | "textarea" | "select" | "number" | "boolean" | "datetime" | "image" | "relation" | "color" | "catalog-target";
 export type Field = {
   name: string; label: string; type: FieldType; required?: boolean;
   choices?: readonly string[]; relation?: CmsResource; help?: string;
@@ -44,6 +44,8 @@ export const CMS_RESOURCES: Record<CmsResource, ResourceDefinition> = {
       { name: "image", label: "Desktop image", type: "image", help: "JPEG, PNG or WebP; max 8 MB. Required when creating." },
       { name: "mobile_image", label: "Optional mobile image", type: "image" },
       { name: "placement", label: "Placement", type: "select", choices: ["home_hero", "home_top", "home_middle", "category_top", "product_detail", "checkout", "global"] },
+      { name: "category", label: "Target category", type: "catalog-target", help: "Optional for category and product detail banners." },
+      { name: "product", label: "Target product", type: "catalog-target", help: "Optional for product detail banners. Choose a product or a category." },
       { name: "cta_text", label: "Button label", type: "text" },
       { name: "link_url", label: "Button link", type: "text", help: "Relative path or https:// URL." },
       { name: "background_color", label: "Background color (#RRGGBB)", type: "color" },

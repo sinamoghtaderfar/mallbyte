@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/states";
 import { getImageUrl } from "@/lib/media/image-url";
 
 import { AddToCartButton } from "@/features/cart/components/add-to-cart-button";
+import { BannerSlot } from "@/features/content/components/storefront-banners";
 import { ProductReviewsSection } from "@/features/reviews/components/product-reviews-section";
 import { WishlistButton } from "@/features/wishlist/components/wishlist-button";
 import Link from "next/link";
@@ -312,6 +313,7 @@ export function ProductDetail() {
         ) : null}
       </div>
 
+      <BannerSlot placement="product_detail" target={String(product.id)} className="mt-12" />
       <div id="reviews" className="mt-20 scroll-mt-36">
         <ProductReviewsSection productId={product.id} />
       </div>

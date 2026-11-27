@@ -11,6 +11,8 @@ import { getApiErrorMessage } from "@/lib/api/errors";
 
 import { getProductFilters, getProducts } from "../api";
 import type { ProductListItem, ProductQueryParams } from "../types";
+import { BannerSlot } from "@/features/content/components/storefront-banners";
+import { CategoryIntroduction } from "./category-introduction";
 import { ProductCard, ProductCardSkeleton } from "./product-card";
 import { ProductReferenceFields } from "./product-reference-fields";
 import { getCatalogUrlSnapshot, getServerCatalogUrlSnapshot, navigateCatalog, parseCatalogUrlState, subscribeCatalogUrl } from "../url-state";
@@ -256,6 +258,8 @@ export function ProductList() {
         </div>
       ) : null}
 
+      <CategoryIntroduction target={appliedFilters.category} />
+      <BannerSlot placement="category_top" target={appliedFilters.category} className="mb-6" />
       <div className="mt-6 grid gap-8 lg:mt-8 lg:grid-cols-[16.5rem_minmax(0,1fr)] lg:gap-12">
         <aside id="catalog-filter-panel" className={`${filtersOpen ? "block" : "hidden"} lg:block`}>
           <form id="catalog-filters" onSubmit={handleFilterSubmit} className="space-y-6 rounded-2xl border border-line bg-surface p-5 shadow-sm lg:sticky lg:top-36 lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none">

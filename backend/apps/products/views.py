@@ -5,6 +5,7 @@ import pandas as pd
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
 from django.db import transaction
 from django.db.models import F, Prefetch, Q
+from django.db.models.deletion import ProtectedError
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -12,11 +13,12 @@ from django_filters.rest_framework import DjangoFilterBackend
 from openpyxl import Workbook
 from rest_framework import filters, generics, serializers, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.parsers import MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.common.exports import safe_spreadsheet_value
+from apps.content.models import Banner
 from apps.products.services import create_product_notification, requeue_product_for_review
 from apps.rbac.permissions import IsProductAdmin, IsVendor, user_has_active_role
 
@@ -61,12 +63,47 @@ class CatalogOrderingFilter(filters.OrderingFilter):
         return super().get_ordering(request, queryset, view)
 
 
+def remove_catalog_record(instance):
+    try:
+        instance.delete()
+    except ProtectedError as exc:
+        if any(isinstance(item, Banner) for item in exc.protected_objects):
+            raise serializers.ValidationError({"detail": "Clear the target from the CMS banner before deleting this item."}) from exc
+        raise
+
+
 # ==================== Category Views ====================
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.filter(is_active=True)
     serializer_class = CategorySerializer
+
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ["name", "slug"]
+
+    @action(detail=False, permission_classes=[IsAuthenticated, IsProductAdmin])
+    def manage(self, request):
+        categories = self.filter_queryset(Category.objects.select_related("parent").order_by("order", "name", "pk"))
+        page = self.paginate_queryset(categories)
+        return self.get_paginated_response(self.get_serializer(page, many=True).data)
+
+    @catalog_write
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    @catalog_write
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        response["Cache-Control"] = "private, no-store"
+        return response
+
+    def perform_destroy(self, instance):
+        remove_catalog_record(instance)
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
@@ -75,7 +112,9 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        if self.action in ("list", "retrieve"):
+        if self.action == "manage" or self.action == "list" and self.request.query_params.get("flat") == "true":
+            context["flat_categories"] = True
+        elif self.action in ("list", "retrieve"):
             children = {}
             for category in Category.objects.filter(is_active=True).select_related("parent").order_by("order", "pk"):
                 children.setdefault(category.parent_id, []).append(category)
@@ -84,8 +123,10 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = (Category.objects.all() if self.action not in ("list", "retrieve") else super().get_queryset()).select_related("parent")
-        if self.action != "list":
-            return queryset
+        if self.action in ("update", "partial_update"):
+            queryset = queryset.select_for_update(of=("self",))
+        if self.action != "list" or self.request.query_params.get("flat") == "true":
+            return queryset.order_by("order", "name", "pk")
         parent = self.request.query_params.get("parent")
         if parent == "null" or parent is None:
             queryset = queryset.filter(parent__isnull=True)
@@ -166,6 +207,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "description", "sku", "brand__name"]
     ordering_fields = ["price", "created_at", "views_count"]
     ordering = ["-created_at"]
+
+    def perform_destroy(self, instance):
+        remove_catalog_record(instance)
 
     def get_serializer_class(self):
         if self.action == "list":

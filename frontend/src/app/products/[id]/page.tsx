@@ -3,7 +3,7 @@ import { ProductDetail } from "@/features/products/components/product-detail";
 
 export default function ProductDetailPage() {
   return (
-    <SiteShell>
+    <SiteShell promotions>
       <main className="mb-container pb-24 pt-8 sm:pt-10">
         <ProductDetail />
       </main>
