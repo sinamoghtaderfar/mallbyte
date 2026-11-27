@@ -2,6 +2,7 @@
 
 import { StatusBadge } from "@/components/ui/badge";
 import { Breadcrumbs } from "@/components/ui/page-header";
+import { ProductThumbnail } from "@/features/products/components/product-thumbnail";
 import { OrderReturnHistory } from "@/features/returns/components/order-return-history";
 
 import {
@@ -250,7 +251,9 @@ function OrderDetailContent() {
               className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex min-w-0 gap-4">
-                <span aria-hidden="true" className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-sunken text-lg font-semibold uppercase text-slate-500">{item.product_name.slice(0, 1)}</span>
+                <span className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-sunken text-lg font-semibold uppercase text-slate-500">
+                  <ProductThumbnail image={item.product_image} fallbackImages={item.product_image_fallbacks} name={item.product_name} />
+                </span>
                 <div className="min-w-0">
                 <Link
                   href={`/products/${item.product_id || item.product}`}

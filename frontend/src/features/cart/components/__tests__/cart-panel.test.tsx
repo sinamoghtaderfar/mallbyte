@@ -1,10 +1,11 @@
 import type { ComponentProps } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useCartStore } from "@/features/cart/cart-store";
 import type { Cart } from "@/features/cart/types";
+import { getPublicApiBaseUrl } from "@/lib/api/origin";
 
 import { CartPanel } from "../cart-panel";
 import { clearCart, getCart, removeCartItem, updateCartItem } from "../../api";
@@ -89,6 +90,7 @@ describe("CartPanel", () => {
 
     expect(await screen.findByText("Keyboard")).toBeInTheDocument();
     expect(screen.getByText("SKU: KB-001")).toBeInTheDocument();
+    expect(screen.getByText("K")).toBeInTheDocument();
     expect(screen.getByText("2,100,000 each")).toBeInTheDocument();
     expect(screen.getByText("1 item in cart")).toBeInTheDocument();
     expect(
@@ -96,16 +98,52 @@ describe("CartPanel", () => {
     ).toHaveAttribute("href", "/checkout");
   });
 
+  it("loads the normalized image from the API again after a cart refresh", async () => {
+    const cart = makeCart();
+    cart.items[0].product_image = "/media/products/keyboard.webp";
+    mockedGetCart.mockResolvedValue(cart);
+
+    const first = render(<CartPanel />);
+    expect(await screen.findByAltText("Keyboard")).toHaveAttribute(
+      "src", `${getPublicApiBaseUrl()}/media/products/keyboard.webp`,
+    );
+    first.unmount();
+    useCartStore.getState().clearCartState();
+    render(<CartPanel />);
+    expect(await screen.findByAltText("Keyboard")).toHaveAttribute(
+      "src", `${getPublicApiBaseUrl()}/media/products/keyboard.webp`,
+    );
+    expect(mockedGetCart).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips unsafe URLs, tries valid alternatives, then shows the existing fallback", async () => {
+    const cart = makeCart();
+    cart.items[0].product_image = "javascript:alert(1)";
+    cart.items[0].product_image_fallbacks = ["//example.invalid/invalid.png", "/media/first.png", "/media/second.png"];
+    mockedGetCart.mockResolvedValue(cart);
+
+    render(<CartPanel />);
+    const image = await screen.findByAltText("Keyboard");
+    expect(image).toHaveAttribute("src", `${getPublicApiBaseUrl()}/media/first.png`);
+    fireEvent.error(image);
+    expect(screen.getByAltText("Keyboard")).toHaveAttribute("src", `${getPublicApiBaseUrl()}/media/second.png`);
+    fireEvent.error(screen.getByAltText("Keyboard"));
+    expect(screen.queryByAltText("Keyboard")).toBeNull();
+    expect(screen.getByText("K")).toBeInTheDocument();
+  });
+
   it("updates quantity", async () => {
     const user = userEvent.setup();
 
-    mockedGetCart.mockResolvedValue(makeCart());
+    const cart = makeCart();
+    cart.items[0].product_image = "/media/keyboard.png";
+    mockedGetCart.mockResolvedValue(cart);
     mockedUpdateCartItem.mockResolvedValue(
       makeCart({
         total_items: 2,
         items: [
           {
-            ...makeCart().items[0],
+            ...cart.items[0],
             quantity: 2,
             total_price: "4200000.00",
           },
@@ -126,6 +164,7 @@ describe("CartPanel", () => {
     });
 
     expect(useCartStore.getState().totalItems).toBe(2);
+    expect(screen.getByAltText("Keyboard")).toHaveAttribute("src", `${getPublicApiBaseUrl()}/media/keyboard.png`);
   });
 
   it("removes item from cart", async () => {

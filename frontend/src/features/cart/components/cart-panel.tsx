@@ -7,6 +7,7 @@ import { ArrowRight, LockKeyhole, RotateCcw, ShoppingBag, Trash2, Truck } from "
 
 import { buttonStyles } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/states";
+import { ProductThumbnail } from "@/features/products/components/product-thumbnail";
 import { getApiErrorMessage } from "@/lib/api/errors";
 
 import { useCartStore } from "../cart-store";
@@ -223,8 +224,8 @@ export function CartPanel() {
           <ul className="divide-y divide-line">
             {cart.items.map((item) => (
               <li key={item.id} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-4 py-6 first:pt-0 sm:grid-cols-[5.5rem_minmax(0,1fr)_auto] sm:items-center sm:gap-6">
-                <Link href={`/products/${item.product}`} aria-hidden="true" tabIndex={-1} className="flex aspect-square items-center justify-center rounded-xl bg-sunken text-xl font-semibold uppercase text-slate-500 ring-1 ring-inset ring-black/[0.04]">
-                  {item.product_name.slice(0, 1)}
+                <Link href={`/products/${item.product}`} aria-hidden="true" tabIndex={-1} className="flex aspect-square items-center justify-center overflow-hidden rounded-xl bg-sunken text-xl font-semibold uppercase text-slate-500 ring-1 ring-inset ring-black/[0.04]">
+                  <ProductThumbnail image={item.product_image} fallbackImages={item.product_image_fallbacks} name={item.product_name} />
                 </Link>
                 <div className="min-w-0">
                   <h2 className="text-base font-medium leading-snug text-slate-950">

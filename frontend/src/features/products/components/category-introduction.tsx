@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiClient } from "@/lib/api/client";
 import type { ProductCategory } from "../types";
+import { navigateCatalog } from "../url-state";
 import { CategoryArtwork } from "./category-artwork";
 
 export function CategoryIntroduction({ target }: { target?: string }) {
@@ -24,7 +25,11 @@ export function CategoryIntroduction({ target }: { target?: string }) {
     <div className="min-w-0">
       <h2 className="mb-display break-words text-2xl">{category.name}</h2>
       {!!category.children?.length && <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted">
-        {category.children.map((child) => <Link key={child.id} href={`/products?category=${child.id}`} className="underline-offset-4 hover:underline">{child.name}</Link>)}
+        {category.children.map((child) => <Link key={child.id} href={`/products?category=${child.id}`}
+          className="underline-offset-4 hover:underline" onNavigate={(event) => {
+            event.preventDefault();
+            navigateCatalog({ filters: { category: String(child.id) }, page: 1, pageSize: 20 });
+          }}>{child.name}</Link>)}
       </div>}
     </div>
   </section>;

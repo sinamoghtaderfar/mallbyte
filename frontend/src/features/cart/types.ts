@@ -3,6 +3,8 @@ export type CartItem = {
   product: number;
   product_name: string;
   product_sku: string;
+  product_image?: string | null;
+  product_image_fallbacks?: string[];
   product_price: string;
   available_stock: number;
   quantity: number;

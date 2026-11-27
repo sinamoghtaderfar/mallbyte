@@ -36,7 +36,7 @@ from .models import (
     Tag,
     Wishlist,
 )
-from .querysets import catalog_queryset, main_image_prefetch
+from .querysets import catalog_queryset, product_images_prefetch
 from .serializers import (
     AttributeSerializer,
     AttributeValueSerializer,
@@ -60,7 +60,8 @@ class CatalogOrderingFilter(filters.OrderingFilter):
     def get_ordering(self, request, queryset, view):
         if request.query_params.get("search", "").strip() and not request.query_params.get("ordering"):
             return ["-_catalog_relevance", "-created_at", "-id"]
-        return super().get_ordering(request, queryset, view)
+        ordering = super().get_ordering(request, queryset, view)
+        return [*ordering, "-pk"] if ordering else ordering
 
 
 def remove_catalog_record(instance):
@@ -389,7 +390,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         if not request.user.is_authenticated:
             return Response({"error": "Authentication required"}, status=401)
 
-        recent = RecentlyViewed.objects.filter(user=request.user, product__status="approved", product__is_active=True).select_related("product").prefetch_related(main_image_prefetch("product__"))[:20]
+        recent = RecentlyViewed.objects.filter(user=request.user, product__status="approved", product__is_active=True).select_related("product").prefetch_related(product_images_prefetch("product__"))[:20]
 
         serializer = RecentlyViewedSerializer(
             recent,
@@ -496,7 +497,7 @@ class WishlistViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Wishlist.objects.filter(user=self.request.user, product__status=Product.StatusChoices.APPROVED, product__is_active=True).select_related("product").prefetch_related(main_image_prefetch("product__"))
+        return Wishlist.objects.filter(user=self.request.user, product__status=Product.StatusChoices.APPROVED, product__is_active=True).select_related("product").prefetch_related(product_images_prefetch("product__"))
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -515,7 +516,7 @@ class RecentlyViewedViewSet(viewsets.GenericViewSet, viewsets.mixins.ListModelMi
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return RecentlyViewed.objects.filter(user=self.request.user, product__status="approved", product__is_active=True).select_related("product").prefetch_related(main_image_prefetch("product__"))[:20]
+        return RecentlyViewed.objects.filter(user=self.request.user, product__status="approved", product__is_active=True).select_related("product").prefetch_related(product_images_prefetch("product__"))[:20]
 
 
 class ProductExportView(generics.GenericAPIView):
