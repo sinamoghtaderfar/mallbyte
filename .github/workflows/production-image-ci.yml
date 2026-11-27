@@ -1,11 +1,6 @@
 name: Production image smoke check
 
 on:
-  pull_request:
-    paths:
-      - 'backend/**'
-      - '.gitattributes'
-      - '.github/workflows/production-image-ci.yml'
   push:
     branches: [main]
     paths:

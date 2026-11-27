@@ -1,12 +1,6 @@
 name: Frontend CI
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.gitattributes'
-      - '.github/workflows/frontend-ci.yml'
   push:
     branches: [main]
     paths:

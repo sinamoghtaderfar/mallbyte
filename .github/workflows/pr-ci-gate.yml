@@ -1,0 +1,63 @@
+name: Mallbyte PR CI
+
+# One stable required check for every PR, including documentation-only changes.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mallbyte-pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  backend-ci:
+    uses: ./.github/workflows/backend-ci.yml
+  browser-e2e:
+    uses: ./.github/workflows/browser-e2e.yml
+  dependency-security:
+    uses: ./.github/workflows/dependency-security.yml
+  frontend-ci:
+    uses: ./.github/workflows/frontend-ci.yml
+  frontend-image-ci:
+    uses: ./.github/workflows/frontend-image-ci.yml
+  loadtest-static-ci:
+    uses: ./.github/workflows/loadtest-static-ci.yml
+  monorepo-ci:
+    uses: ./.github/workflows/monorepo-ci.yml
+  production-gateway-ci:
+    uses: ./.github/workflows/production-gateway-ci.yml
+  production-image-ci:
+    uses: ./.github/workflows/production-image-ci.yml
+  staging-recovery-ci:
+    uses: ./.github/workflows/staging-recovery-ci.yml
+  static-quality:
+    uses: ./.github/workflows/static-quality.yml
+  gate:
+    name: Mallbyte CI Gate
+    if: ${{ always() }}
+    needs:
+      - backend-ci
+      - browser-e2e
+      - dependency-security
+      - frontend-ci
+      - frontend-image-ci
+      - loadtest-static-ci
+      - monorepo-ci
+      - production-gateway-ci
+      - production-image-ci
+      - staging-recovery-ci
+      - static-quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every verification job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
+          jq -e 'length == 11 and all(.[]; .result == "success")' <<< "$RESULTS" >/dev/null

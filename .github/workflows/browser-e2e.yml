@@ -1,12 +1,6 @@
 name: Browser E2E smoke checks
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.gitattributes'
-      - '.github/workflows/browser-e2e.yml'
   push:
     branches: [main]
     paths:
