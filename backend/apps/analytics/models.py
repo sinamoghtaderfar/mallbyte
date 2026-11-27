@@ -384,3 +384,14 @@ class AnalyticsGeneratedReport(models.Model):
                 "updated_at",
             ]
         )
+
+
+class MarketplaceDemoRun(models.Model):
+    """Provenance for the manually installed development fixture."""
+
+    fingerprint = models.CharField(max_length=64)
+    as_of = models.DateField()
+    rows = models.JSONField(default=dict)
+    files = models.JSONField(default=list)
+    reused_stores = models.JSONField(default=list)
+    report = models.JSONField(default=dict)

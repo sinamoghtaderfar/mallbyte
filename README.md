@@ -82,6 +82,8 @@ docker compose down
 
 Ordinary `down` retains named volumes for the database, Redis and uploaded media. Existing backend-only developer tools, Mailpit, staging manifests and recovery procedures are available in `backend/`. The host-side observability tool accepts `--environment monorepo` for the root development stack. [Controlled worker restarts](backend/docs/observability/RUNBOOK_CELERY_RESTART.md)
 
+For a reproducible marketplace with independent sellers, orders, inventory and settlement history, see the [development seeder and isolated test runbook](docs/marketplace-demo.md).
+
 ## Test and verify
 
 With the stack running, these commands use the project runtimes. Run frontend build and type generation in a disposable container to keep the running dev server's build output separate.
