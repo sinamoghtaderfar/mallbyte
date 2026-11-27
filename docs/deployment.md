@@ -2,6 +2,8 @@
 
 Local development uses the root Compose project. Production uses separate services behind an HTTPS gateway. This repository supplies production Dockerfiles and a manual GitHub Actions workflow. Production provisioning, the SSH hook and the site's backup policy belong to the infrastructure operator.
 
+For an operator-run installation, boot recovery, or staged rollout using a fixed Linux checkout, see the [Linux server bootstrap runbook](server-bootstrap.md).
+
 ## Release workflow
 
 On the GitHub repository for the monorepo, protect `main` and create a **production** GitHub Environment. Restrict its deployment branches to `main`, configure required reviewers, prevent self-review and restrict bypasses. Limit workflow changes and environment administration to trusted maintainers. The workflow must be present on the default branch before GitHub offers its manual dispatch.

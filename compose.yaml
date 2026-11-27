@@ -39,6 +39,7 @@ x-migrated: &migrated
 
 services:
   db:
+    restart: unless-stopped
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: mallbyte
@@ -54,6 +55,7 @@ services:
       retries: 12
 
   redis:
+    restart: unless-stopped
     image: redis:7-alpine
     volumes:
       - redis_data:/data
@@ -69,7 +71,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: ["python", "manage.py", "migrate", "--noinput"]
+    restart: "no"
+    command: ["python", "manage.py", "initialize_platform"]
     depends_on:
       db:
         condition: service_healthy
@@ -77,6 +80,7 @@ services:
         condition: service_healthy
 
   web:
+    restart: unless-stopped
     <<: *django
     command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
     depends_on: *migrated
@@ -89,6 +93,7 @@ services:
       retries: 12
 
   celery_worker:
+    restart: unless-stopped
     <<: *django
     command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency=2"]
     depends_on: *migrated
@@ -100,11 +105,13 @@ services:
       start_period: 30s
 
   celery_beat:
+    restart: unless-stopped
     <<: *django
-    command: ["celery", "-A", "config", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--scheduler", "apps.observability.beat_scheduler:SingletonDatabaseScheduler"]
     depends_on: *migrated
 
   frontend:
+    restart: unless-stopped
     build:
       context: ./frontend
       dockerfile: Dockerfile.production

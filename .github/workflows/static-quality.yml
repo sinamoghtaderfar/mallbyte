@@ -6,6 +6,9 @@ on:
     paths:
       - 'backend/**/*.py'
       - 'backend/pyproject.toml'
+      - 'scripts/mallbyte-server.py'
+      - 'scripts/test_mallbyte_server.py'
+      - 'deploy/systemd/**'
       - '.gitattributes'
       - '.github/workflows/static-quality.yml'
   workflow_call:
@@ -34,3 +37,8 @@ jobs:
         run: ruff check apps/content apps/observability config
       - name: Parse backend Python sources
         run: python -m compileall -q apps config deploy ops
+      - name: Verify host deployment and operations tooling
+        run: |
+          sh -n docker/entrypoint.sh
+          python -B -m unittest discover -s ../scripts -p test_mallbyte_server.py
+          python -B -m unittest discover -s deploy/observability_ops

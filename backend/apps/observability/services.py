@@ -291,7 +291,7 @@ def check_celery_worker_health():
 def check_celery_beat_health():
     try:
         task = PeriodicTask.objects.filter(
-            name="Collect observability health snapshot",
+            task="apps.observability.tasks.collect_observability_health_snapshot",
             enabled=True,
         ).first()
 
@@ -309,10 +309,12 @@ def check_celery_beat_health():
                 "error": "Periodic health snapshot task has not run yet.",
             }
 
-        max_age_minutes = 10
+        max_age = timedelta(minutes=10)
+        if task.interval_id:
+            max_age = max(max_age, task.interval.schedule.run_every * 2)
         age = timezone.now() - task.last_run_at
 
-        if age <= timedelta(minutes=max_age_minutes):
+        if age <= max_age:
             return {
                 "status": HealthStatusChoices.HEALTHY,
                 "last_run_at": task.last_run_at,

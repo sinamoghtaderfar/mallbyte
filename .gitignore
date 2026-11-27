@@ -16,3 +16,6 @@ backups/
 *.sql
 marketplace-demo-media/
 /compose.override.yaml
+
+# Python host tooling
+__pycache__/

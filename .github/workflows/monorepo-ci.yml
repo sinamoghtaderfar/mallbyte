@@ -53,6 +53,12 @@ jobs:
               if time.monotonic() >= deadline:
                   raise AssertionError("Celery beat did not install the order reservation schedule")
               time.sleep(1)
+          for name, every, period in [
+              ("Collect observability health snapshot", 5, "minutes"),
+              ("Clean up observability logs", 24, "hours"),
+          ]:
+              assert PeriodicTask.objects.filter(name=name, enabled=True, interval__every=every,
+                                                 interval__period=period).count() == 1, name
           PY
       - name: Check browser-origin access and protected API
         run: |

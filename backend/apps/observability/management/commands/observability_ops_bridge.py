@@ -7,7 +7,7 @@ import sys
 import uuid
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import F
 from django.utils import timezone
 
@@ -41,6 +41,9 @@ class Command(BaseCommand):
             return
         if opts["verb"] == "claim":
             with transaction.atomic():
+                if connection.vendor == "postgresql":
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT pg_advisory_xact_lock(746925133)")
                 now = timezone.now()
                 # Defer target if another host operation for it is currently running.
                 running = set(Operation.objects.filter(status=Operation.Status.RUNNING,
