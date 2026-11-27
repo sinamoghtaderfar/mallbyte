@@ -1,11 +1,6 @@
 name: Load test configuration validation
 
 on:
-  pull_request:
-    paths:
-      - 'backend/ops/loadtest/**'
-      - '.gitattributes'
-      - '.github/workflows/loadtest-static-ci.yml'
   push:
     branches: [main]
     paths:

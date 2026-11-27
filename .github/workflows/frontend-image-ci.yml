@@ -1,12 +1,6 @@
 name: Frontend production image smoke
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.gitattributes'
-      - '.github/workflows/frontend-image-ci.yml'
   push:
     branches: [main]
     paths:

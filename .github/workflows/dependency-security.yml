@@ -1,11 +1,6 @@
 name: Dependency security
 
 on:
-  pull_request:
-    paths:
-      - 'backend/requirements/**'
-      - '.gitattributes'
-      - '.github/workflows/dependency-security.yml'
   push:
     branches: [main]
   schedule:

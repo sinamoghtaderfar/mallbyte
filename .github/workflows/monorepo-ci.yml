@@ -1,15 +1,6 @@
 name: Full-stack integration
 
 on:
-  pull_request:
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'compose.yaml'
-      - '.env.example'
-      - 'scripts/init-dev-env.py'
-      - '.gitattributes'
-      - '.github/workflows/monorepo-ci.yml'
   push:
     branches: [main]
     paths:

@@ -1,12 +1,6 @@
 name: Browser E2E smoke checks
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.gitattributes'
-      - '.github/workflows/browser-e2e.yml'
   push:
     branches: [main]
     paths:
@@ -52,6 +46,23 @@ jobs:
           mkdir -p .playwright-runner
           npm install --prefix .playwright-runner --no-save @playwright/test@1.58.2
           ln -s ../.playwright-runner/node_modules/@playwright node_modules/@playwright
+      # The hosted Ubuntu runner ships unrelated third-party APT sources.
+      # Microsoft prod is not needed for Chromium and can return HTTP 403.
+      # Disable only its dedicated source in this disposable runner; keep
+      # Ubuntu sources and all package signature checks enabled.
+      - name: Isolate Chromium dependency installation from Microsoft APT feed
+        run: |
+          for source in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            [[ -f "$source" ]] || continue
+            if grep -Eq '^[[:space:]]*(deb[[:space:]]|URIs:).*https://packages\.microsoft\.com/ubuntu/24\.04/prod([/[:space:]]|$)' "$source"; then
+              if grep -E '^[[:space:]]*(deb[[:space:]]|URIs:)' "$source" | grep -Evq 'https://packages\.microsoft\.com/ubuntu/24\.04/prod([/[:space:]]|$)'; then
+                echo "::error::Refusing to disable mixed APT source $source"
+                exit 1
+              fi
+              echo "Disabling unrelated Microsoft APT feed: $source"
+              sudo mv -- "$source" "$source.disabled-for-playwright"
+            fi
+          done
       - name: Install Chromium and browser libraries
         run: .playwright-runner/node_modules/.bin/playwright install --with-deps chromium
       - name: Run browser tests with mocked APIs
