@@ -3,7 +3,8 @@
 import type { ReactNode } from "react";
 
 import { useAuthStore } from "@/features/auth/auth-store";
-import { isAdminUser } from "@/features/auth/roles";
+import { usePathname } from "next/navigation";
+import { mayOpenWorkspace } from "@/features/auth/roles";
 
 import { AccessDenied } from "./access-denied";
 
@@ -12,6 +13,7 @@ type AdminOnlyRouteProps = {
 };
 
 export function AdminOnlyRoute({ children }: AdminOnlyRouteProps) {
+  const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isBootstrapped = useAuthStore((state) => state.isBootstrapped);
@@ -34,9 +36,9 @@ export function AdminOnlyRoute({ children }: AdminOnlyRouteProps) {
     );
   }
 
-  if (!isAdminUser(user)) {
+  if (!mayOpenWorkspace(user, pathname?.split("/").slice(0, 3).join("/") ?? "/admin")) {
     return (
-      <AccessDenied description="Only staff and admin users can view this page." />
+      <AccessDenied description="Your account needs permission for this workspace." />
     );
   }
 

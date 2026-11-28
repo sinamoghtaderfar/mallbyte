@@ -113,6 +113,7 @@ class RBACTestMixin:
         user = User(
             email=email,
             full_name=full_name,
+            email_verified=True,
             is_staff=is_staff,
             is_superuser=is_superuser,
             is_active=is_active,

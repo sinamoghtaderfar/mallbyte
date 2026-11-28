@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ArrowUpRight, ClipboardList, HeartHandshake, PackageCheck } from "lucide-react";
 
 import { StatCard } from "@/components/ui/card";
+import { mayOpenWorkspace } from "@/features/auth/roles";
 import { ADMIN_NAV } from "@/components/layout/workspace-nav";
 import { useAuthStore } from "@/features/auth/auth-store";
 import { getAdminPendingSellers } from "@/features/admin-sellers/api";
@@ -16,6 +17,8 @@ const loading: Snapshot = { value: null, state: "loading" };
 
 const descriptions: Record<string, string> = {
   "/admin/orders": "Customer orders and fulfilment states.",
+  "/admin/categories": "Manage product categories.",
+  "/support": "Manage customer support tickets.",
   "/admin/returns": "Returns and verified refund workflows.",
   "/admin/shipments": "Parcels and delivery operations.",
   "/admin/inventory": "Stock, reservations and warehouse activity.",
@@ -44,6 +47,10 @@ export function ControlCenter() {
   const [pendingSellers, setPendingSellers] = useState<Snapshot>(loading);
   const [returns, setReturns] = useState<Snapshot>(loading);
 
+  const showAnalytics = mayOpenWorkspace(user, "/admin/financial");
+  const showSellers = mayOpenWorkspace(user, "/admin/sellers");
+  const showReturns = mayOpenWorkspace(user, "/admin/returns");
+
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
@@ -51,13 +58,13 @@ export function ControlCenter() {
       (value: number) => { if (active) set({ value, state: "ready" }); },
       () => { if (active) set({ value: null, state: "unavailable" }); },
     ] as const;
-    void getAdminInsights("month").then((r) => r.dashboard.orders.total_orders).then(...settle(setOrders));
-    void getAdminPendingSellers(1, controller.signal).then((r) => r.count).then(...settle(setPendingSellers));
-    void getAdminReturns(1, controller.signal).then((r) => r.count).then(...settle(setReturns));
+    if (showAnalytics) void getAdminInsights("month").then((r) => r.dashboard.orders.total_orders).then(...settle(setOrders));
+    if (showSellers) void getAdminPendingSellers(1, controller.signal).then((r) => r.count).then(...settle(setPendingSellers));
+    if (showReturns) void getAdminReturns(1, controller.signal).then((r) => r.count).then(...settle(setReturns));
     return () => { active = false; controller.abort(); };
-  }, []);
+  }, [showAnalytics, showSellers, showReturns, user?.id]);
 
-  const groups = ADMIN_NAV.map((g) => ({ ...g, links: g.links.filter((l) => l.href !== "/admin" && (!l.superOnly || user?.is_superuser)) }));
+  const groups = ADMIN_NAV.map((g) => ({ ...g, links: g.links.filter((l) => l.href !== "/admin" && mayOpenWorkspace(user, l.href)) })).filter(g => g.links.length);
 
   return (
     <div className="space-y-10">
@@ -68,11 +75,11 @@ export function ControlCenter() {
         <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">One workspace for marketplace operations, content management and financial oversight. Every section enforces its own permissions.</p>
       </header>
 
-      <section aria-label="Live snapshot" className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Orders this month" value={snapshotValue(orders)} icon={<ClipboardList size={16} />} hint={orders.state === "unavailable" ? "Requires platform analytics permission" : "From platform analytics"} />
-        <StatCard label="Seller applications pending" value={snapshotValue(pendingSellers)} icon={<HeartHandshake size={16} />} hint={<Link href="/admin/sellers" className="underline-offset-4 hover:underline">Review applications</Link>} />
-        <StatCard label="Return requests" value={snapshotValue(returns)} icon={<PackageCheck size={16} />} hint={<Link href="/admin/returns" className="underline-offset-4 hover:underline">Open returns queue</Link>} />
-      </section>
+      {(showAnalytics || showSellers || showReturns) && <section aria-label="Live snapshot" className="grid gap-4 sm:grid-cols-3">
+        {showAnalytics && <StatCard label="Orders this month" value={snapshotValue(orders)} icon={<ClipboardList size={16} />} hint={orders.state === "unavailable" ? "Requires platform analytics permission" : "From platform analytics"} />}
+        {showSellers && <StatCard label="Seller applications pending" value={snapshotValue(pendingSellers)} icon={<HeartHandshake size={16} />} hint={<Link href="/admin/sellers" className="underline-offset-4 hover:underline">Review applications</Link>} />}
+        {showReturns && <StatCard label="Return requests" value={snapshotValue(returns)} icon={<PackageCheck size={16} />} hint={<Link href="/admin/returns" className="underline-offset-4 hover:underline">Open returns queue</Link>} />}
+      </section>}
 
       {groups.map((group) => (
         <section key={group.label} aria-labelledby={`cc-${group.label}`}>

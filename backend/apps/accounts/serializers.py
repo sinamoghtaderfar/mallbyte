@@ -21,6 +21,9 @@ class VerifiedTokenObtainPairSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         if not user.email_verified:
             raise AuthenticationFailed("Verify your email using OTP before signing in.")
+        from .mfa import is_privileged
+        if is_privileged(user):
+            raise AuthenticationFailed("Use email OTP and authenticator MFA.")
         return issue_user_tokens(user)
 
 
@@ -46,6 +49,17 @@ class UserSerializer(serializers.ModelSerializer):
             "is_superuser",
             "email_verified",
         ]
+
+
+class SessionUserSerializer(UserSerializer):
+    capabilities = serializers.SerializerMethodField()
+
+    def get_capabilities(self, obj) -> list[str]:
+        from apps.rbac.privileges import authority
+        return sorted(authority(obj))
+
+    class Meta(UserSerializer.Meta):
+        fields = [*UserSerializer.Meta.fields, "capabilities"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -128,7 +142,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 class ProfileSerializer(serializers.ModelSerializer):
     """Serializer for user profile"""
 
-    user = UserSerializer(read_only=True)
+    user = SessionUserSerializer(read_only=True)
 
     class Meta:
         model = Profile

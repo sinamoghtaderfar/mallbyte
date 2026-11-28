@@ -2,10 +2,12 @@
 
 import { FormEvent, useState } from "react";
 import { Mail, ShieldCheck, KeyRound } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 
 import { getApiErrorMessage } from "@/lib/api/errors";
 import { requestOtp, verifyOtp, setupAdminMfa, finishAdminMfa } from "../api";
+import { landingPage } from "../roles";
 import { useAuthStore } from "../auth-store";
 import type { AuthSuccessResponse } from "../types";
 
@@ -20,6 +22,9 @@ export function OtpLoginForm() {
   const [emailCode, setEmailCode] = useState("");
   const [challenge, setChallenge] = useState("");
   const [password, setPassword] = useState("");
+  const [establishPassword, setEstablishPassword] = useState(false);
+  const [reference, setReference] = useState("");
+  const [qr, setQr] = useState("");
   const [secret, setSecret] = useState("");
   const [authUri, setAuthUri] = useState("");
   const [factorCode, setFactorCode] = useState("");
@@ -48,6 +53,8 @@ export function OtpLoginForm() {
     setChallenge("");
     setPassword("");
     setSecret("");
+    setQr("");
+    setReference("");
     setAuthUri("");
     setFactorCode("");
     if (response.recovery_codes?.length) {
@@ -56,7 +63,7 @@ export function OtpLoginForm() {
       setStep("save-codes");
     } else {
       setUser(response.user);
-      router.push(response.user.is_superuser ? "/admin/super" : response.user.is_staff ? "/admin" : "/");
+      router.push(landingPage(response.user));
     }
   }
 
@@ -80,6 +87,8 @@ export function OtpLoginForm() {
       setEmailCode("");
       if ("mfa_required" in response && response.mfa_required) {
         setChallenge(response.challenge);
+        setReference(response.approval_reference ?? "");
+        setEstablishPassword(Boolean(response.establish_password));
         setStep(response.mfa_enrolled ? "mfa-code" : "setup-password");
         setServerMessage("Email verified. An additional factor is required for privileged accounts.");
       } else if ("access" in response) {
@@ -94,6 +103,7 @@ export function OtpLoginForm() {
       const response = await setupAdminMfa({ challenge, password });
       setPassword("");
       setSecret(response.secret);
+      setQr(response.qr_png ?? "");
       setAuthUri(response.otpauth_uri);
       setFactorCode("");
       setStep("setup-code");
@@ -121,6 +131,8 @@ export function OtpLoginForm() {
     setChallenge("");
     setPassword("");
     setSecret("");
+    setQr("");
+    setReference("");
     setAuthUri("");
     setFactorCode("");
     setServerError("");
@@ -148,7 +160,7 @@ export function OtpLoginForm() {
         <p className="mt-3 text-[0.9375rem] leading-7 text-muted">
           {step === "email" ? "Receive a one-time code to your email."
             : step === "email-code" ? `Enter the six-digit code sent to ${email}.`
-              : step === "setup-password" ? "Confirm your existing admin password before enabling MFA."
+              : step === "setup-password" ? (establishPassword ? "Create a password to protect your privileged account." : "Confirm your existing admin password before enabling MFA.")
                 : step === "setup-code" ? "Enter the account secret manually in Google Authenticator, Microsoft Authenticator or another TOTP app."
                   : step === "mfa-code" ? "Enter the six-digit code from your authenticator app."
                     : step === "recovery" ? "Enter one of your unused recovery codes."
@@ -177,14 +189,19 @@ export function OtpLoginForm() {
 
       {step === "setup-password" && (
         <form onSubmit={handleSetup} className="space-y-4">
-          <label htmlFor="admin-password" className="block text-sm font-medium text-slate-800">Existing admin password</label>
-          <input id="admin-password" type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)} className="mb-control min-h-12" />
+          {reference && <div className="rounded-xl border p-3 text-sm">
+            <p>Contact your Super Admin in person or on a known phone number. Ask them to verify your identity and approve this enrollment reference within five minutes.</p>
+            <code aria-label="Enrollment reference" className="break-all">{reference}</code>
+          </div>}
+          <label htmlFor="admin-password" className="block text-sm font-medium text-slate-800">{establishPassword ? "New password" : "Existing admin password"}</label>
+          <input id="admin-password" type="password" autoComplete={establishPassword ? "new-password" : "current-password"} required value={password} onChange={e => setPassword(e.target.value)} className="mb-control min-h-12" />
           <button disabled={isSubmitting} type="submit" className="w-full mb-btn mb-btn-primary min-h-12 rounded-full">{isSubmitting ? "Verifying..." : "Set up authenticator"}</button>
         </form>
       )}
 
       {step === "setup-code" && (
         <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
+          {qr && <Image unoptimized width={224} height={224} src={`data:image/png;base64,${qr}`} alt="Scan with your authenticator app" className="mx-auto max-w-full" />}
           <p className="font-medium">Authenticator setup key</p>
           <code className="mt-2 block break-all select-all font-mono text-base">{secret}</code>
           <p className="mt-2 text-xs text-slate-600">Keep this key private. The setup URI is available for apps that support manual URI entry.</p>
@@ -212,7 +229,7 @@ export function OtpLoginForm() {
             setRecoveryCodes([]);
             setSavedUser(null);
             setUser(savedUser);
-            router.push(savedUser.is_superuser ? "/admin/super" : savedUser.is_staff ? "/admin" : "/");
+            router.push(landingPage(savedUser));
           }} className="w-full mb-btn mb-btn-primary min-h-12 rounded-full">I saved my recovery codes</button>
         </div>
       )}

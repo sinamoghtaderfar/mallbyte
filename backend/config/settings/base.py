@@ -72,6 +72,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "apps.observability.middleware.RequestLogMiddleware",
+    "apps.accounts.mfa_authentication.BearerTransactionMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -255,6 +256,7 @@ CELERY_BEAT_SCHEDULER = "apps.observability.beat_scheduler:SingletonDatabaseSche
 CHECKOUT_SHIPPING_COST = os.getenv("CHECKOUT_SHIPPING_COST", "0")
 ORDER_RESERVATION_TTL_SECONDS = int(os.getenv("ORDER_RESERVATION_TTL_SECONDS", "1800"))
 CELERY_BEAT_SCHEDULE = {
+    "retry-security-notices": {"task": "apps.accounts.tasks.retry_security_notices", "schedule": 300.0},
     "expire-pending-order-reservations": {
         "task": "apps.orders.tasks.expire_pending_orders",
         "schedule": 60.0,

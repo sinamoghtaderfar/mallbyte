@@ -43,6 +43,7 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email, full_name="", password=None, phone=None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
+        extra_fields.setdefault("operator_provisioned_password", bool(password))
         extra_fields.setdefault("is_active", True)
 
         if extra_fields.get("is_staff") is not True:
@@ -67,7 +68,7 @@ class User(AbstractUser):
 
     # Remove the default username field
     username = None
-    _SECURITY_FIELDS = frozenset({"password", "email", "email_verified", "is_active", "is_deleted", "is_staff", "is_superuser"})
+    _SECURITY_FIELDS = frozenset({"password", "email", "email_verified", "is_active", "is_deleted", "is_staff", "is_superuser", "operator_provisioned_password"})
 
     phone = models.CharField(
     max_length=15,
@@ -95,6 +96,7 @@ class User(AbstractUser):
     email_verified_at = models.DateTimeField(null=True, blank=True, verbose_name="Email Verified At")
     # JWTs issued before an ownership/security transition must not become valid later.
     auth_version = models.PositiveIntegerField(default=1, editable=False)
+    operator_provisioned_password = models.BooleanField(default=False, editable=False)
 
     # Custom admin
     objects = UserManager()
@@ -128,6 +130,13 @@ class User(AbstractUser):
     # String representation of the user
     def __str__(self):
         return f"{self.full_name} - {self.email}"
+
+    def clean(self):
+        super().clean()
+        if self.pk and not self.email_verified:
+            prior = type(self)._base_manager.filter(pk=self.pk).values("is_staff", "is_superuser").first()
+            if prior and ((self.is_staff and not prior["is_staff"]) or (self.is_superuser and not prior["is_superuser"])):
+                raise ValidationError({"email_verified": "Confirm this account's email before granting administrative access."})
 
     @classmethod
     def from_db(cls, db, field_names, values):
@@ -168,12 +177,44 @@ class User(AbstractUser):
                         changed = changed or previous[field] != getattr(self, field)
                     else:
                         setattr(self, field, previous[field])
+                if changed and any(getattr(self, field) != previous[field] for field in ("email", "password", "is_superuser", "is_staff")):
+                    self.operator_provisioned_password = False
+                    if update_fields is not None:
+                        kwargs["update_fields"] = set(kwargs["update_fields"]) | {"operator_provisioned_password"}
+                if (previous["is_active"] and previous["is_superuser"] and previous["email_verified"]
+                        and (not self.is_active or not self.is_superuser or self.is_deleted or not self.email_verified)):
+                    self.protect_last_enrolled_admin()
                 self.auth_version = previous["auth_version"] + int(changed)
                 if changed and update_fields is not None:
-                    kwargs["update_fields"] = set(update_fields) | {"auth_version"}
+                    kwargs["update_fields"] = set(kwargs["update_fields"]) | {"auth_version"}
             result = super().save(*args, **kwargs)
+            if previous is not None and changed:
+                from .security_mail import queue_notice
+                changed_fields = {field for field in relevant if getattr(self, field) != previous[field]}
+                flag_changes = changed_fields.intersection({"is_staff", "is_superuser"})
+                if flag_changes:
+                    from apps.rbac.models import AdminLog
+                    AdminLog.objects.create(action="change_permission", target_user=self,
+                                            details={"security_flags": {field: getattr(self, field) for field in sorted(flag_changes)}})
+                if changed_fields.intersection({"is_staff", "is_superuser", "is_active", "is_deleted", "password", "email"}):
+                    OTP.objects.filter(email__in=[previous["email"], self.email], is_used=False).update(is_used=True)
+                    if previous["email_verified"] and self.email_verified:
+                        queue_notice(self, "Your account credentials, access or status changed. Previous sessions were revoked.")
             self._loaded_security_state = {field: getattr(self, field) for field in security_fields if field not in self.get_deferred_fields()}
             return result
+
+    def protect_last_enrolled_admin(self, removing=None):
+        enrolled = list(type(self).objects.select_for_update(of=("self",)).filter(
+            is_active=True, is_superuser=True, email_verified=True, admin_mfa__enabled=True,
+        ).order_by("pk").values_list("pk", flat=True))
+        if self.pk in enrolled and not set(enrolled).difference(removing or [self.pk]):
+            raise PermissionDenied("Another verified and enrolled Super Admin is required.")
+
+    def _get_session_auth_hash(self, secret=None):
+        from django.utils.crypto import salted_hmac
+
+        return salted_hmac("mallbyte.user.security", f"{self.password}:{self.auth_version}",
+                           secret=secret, algorithm="sha256").hexdigest()
 
     def invalidate_sessions(self):
         """Atomically revoke all access and refresh sessions for this account."""

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
+import { landingPage } from "../roles";
 import { useAuthStore } from "../auth-store";
 
 type GuestOnlyRouteProps = {
@@ -22,7 +23,7 @@ export function GuestOnlyRoute({ children }: GuestOnlyRouteProps) {
 
   useEffect(() => {
     if (shouldRedirect) {
-      router.replace(user?.is_superuser ? "/admin/super" : user?.is_staff ? "/admin" : "/profile");
+      router.replace(landingPage(user, "/profile"));
     }
   }, [router, shouldRedirect, user]);
 

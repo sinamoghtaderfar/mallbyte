@@ -20,7 +20,7 @@ from rest_framework.response import Response
 from apps.common.exports import safe_spreadsheet_value
 from apps.content.models import Banner
 from apps.products.services import create_product_notification, requeue_product_for_review
-from apps.rbac.permissions import IsProductAdmin, IsVendor, user_has_active_role
+from apps.rbac.permissions import CanManageCategories, IsProductAdmin, IsVendor, user_has_active_role
 
 from .filters import ProductFilter
 from .models import (
@@ -109,7 +109,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
             return [AllowAny()]
-        return [IsAuthenticated(), IsProductAdmin()]
+        return [IsAuthenticated(), CanManageCategories()]
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

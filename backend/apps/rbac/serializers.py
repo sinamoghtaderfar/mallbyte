@@ -180,8 +180,17 @@ class UserRoleSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "assigned_at",
+            "assigned_by",
             "is_expired",
         ]
+
+    def validate(self, attrs):
+        role = attrs.get("role") or getattr(self.instance, "role", None)
+        user = attrs.get("user") or getattr(self.instance, "user", None)
+        if user and role and attrs.get("is_active", getattr(self.instance, "is_active", True)):
+            from .privileges import validate_assignment
+            validate_assignment(user, role)
+        return attrs
 
     def get_assigned_by_name(self, obj):
         if obj.assigned_by:

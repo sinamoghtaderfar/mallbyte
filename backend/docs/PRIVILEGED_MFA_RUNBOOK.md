@@ -1,6 +1,6 @@
 # Privileged MFA — rollout and recovery
 
-The Next.js admin console uses email OTP as the **first factor** and TOTP as the **second factor**. Privileged includes all `is_staff` and `is_superuser` users.
+The Next.js admin console uses email OTP as the **first factor** and TOTP as the **second factor**. Staff, superusers and accounts with effective administrative business permissions require MFA. See the [privileged onboarding and recovery procedure](../../docs/privileged-role-onboarding.md).
 
 ## Deployment prerequisites
 
@@ -18,23 +18,23 @@ The Next.js admin console uses email OTP as the **first factor** and TOTP as the
 
 1. Request email OTP at `/api/auth/otp/request/`.
 2. Verify at `/api/auth/otp/verify/`: privileged users receive `{mfa_required:true,challenge,mfa_enrolled:false}`, **not a JWT**.
-3. Verify the existing admin password at `/api/auth/mfa/setup/` using the 5-minute challenge.
-4. Add the returned secret to a TOTP authenticator (manual secret entry).
+3. Obtain independent approval for the account and current enrollment reference. Confirm an existing password or establish the first password using the five-minute challenge at `/api/auth/mfa/setup/`.
+4. Scan the locally generated QR or use the manual secret in a TOTP authenticator.
 5. Verify its current 6-digit code at `/api/auth/mfa/complete/`; store the **ten single-use recovery codes** in a password manager. Never store them in the app.
 6. Subsequent logins use `/api/auth/mfa/verify/` after email OTP, supplying either a TOTP or an unused recovery code.
 
-A challenge expires after five minutes, permits at most five attempts and is consumed on success. Replayed TOTP steps are rejected.
+A challenge expires after five minutes, permits at most five attempts per verification stage and is consumed on success. Replayed TOTP steps are rejected.
 
 ## Session enforcement
 
 - Privileged access and refresh JWTs carry `mfa=true` and the current MFA session version.
 - APIs reject privileged JWTs without those claims or a matching enabled MFA device.
-- Password-only token login is blocked for staff and superusers.
+- Password-only token login is blocked for every privileged account.
 - Legacy privileged tokens become invalid as soon as the deployment switches authentication classes.
 
 ## Django Admin
 
-The password-only Django admin endpoint is **disabled in production** (`DJANGO_ADMIN_ENABLED=False`). It remains available in development for maintenance, but is **not** MFA-protected. A separate session-based MFA integration is required before production Django Admin is re-enabled.
+The password-only Django admin endpoint is **disabled in production** (`DJANGO_ADMIN_ENABLED=False`). Development maintenance uses a session established by the storefront MFA flow. The native admin checks the current device version and account epoch.
 
 ## Recovery policy
 

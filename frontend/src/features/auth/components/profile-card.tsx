@@ -1,15 +1,12 @@
 "use client";
 
 import { useAuthStore } from "../auth-store";
+import type { AuthUser } from "../types";
 import { isAdminUser } from "../roles";
 import { ProfileSellerAction } from "@/features/seller/components/profile-seller-action";
 
-function getAccountTypeLabel(user: {
-  is_seller?: boolean;
-  is_staff?: boolean;
-  is_superuser?: boolean;
-}) {
-  if (user.is_staff || user.is_superuser) {
+function getAccountTypeLabel(user: AuthUser) {
+  if (isAdminUser(user)) {
     return "Platform admin";
   }
 
@@ -75,7 +72,7 @@ export function ProfileCard() {
         </div>
       </div>
 
-      {!isAdminUser(user) && <ProfileSellerAction key={user.id} />}
+      {(!isAdminUser(user) || user.is_seller) && <ProfileSellerAction key={user.id} />}
     </div>
   );
 }

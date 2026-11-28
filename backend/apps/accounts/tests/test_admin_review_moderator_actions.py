@@ -32,6 +32,7 @@ class UserAdminReviewModeratorActionTests(TestCase):
         self.user = User.objects.create_user(
             email="moderator@example.com",
             full_name="Moderator User",
+            email_verified=True,
             password="password",
         )
 
@@ -50,7 +51,7 @@ class UserAdminReviewModeratorActionTests(TestCase):
 
         self.user.refresh_from_db()
 
-        self.assertTrue(self.user.is_staff)
+        self.assertFalse(self.user.is_staff)
         self.assertFalse(self.user.is_superuser)
         self.assertTrue(self.user.is_active)
         self.assertTrue(
@@ -123,7 +124,7 @@ class UserAdminReviewModeratorActionTests(TestCase):
         self.assertFalse(suspended.is_staff)
         self.assertFalse(suspended.groups.filter(name=REVIEW_MODERATORS_GROUP_NAME).exists())
 
-    def test_removal_clears_staff_when_no_other_admin_permissions_exist(self):
+    def test_removal_preserves_ordinary_account_without_django_staff_access(self):
         request = self.make_request(self.superuser)
         self.user_admin.make_review_moderators(request, User.objects.filter(pk=self.user.pk))
         self.user_admin.remove_review_moderator_role(request, User.objects.filter(pk=self.user.pk))
@@ -132,9 +133,17 @@ class UserAdminReviewModeratorActionTests(TestCase):
 
     def test_removal_keeps_staff_when_another_admin_permission_remains(self):
         from django.contrib.auth.models import Permission
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
         request = self.make_request(self.superuser)
         self.user_admin.make_review_moderators(request, User.objects.filter(pk=self.user.pk))
         self.user.user_permissions.add(Permission.objects.get(codename="view_product", content_type__app_label="products"))
         self.user_admin.remove_review_moderator_role(request, User.objects.filter(pk=self.user.pk))
         self.user.refresh_from_db()
         self.assertTrue(self.user.is_staff)
+
+    def test_unverified_account_cannot_be_promoted_through_admin_action(self):
+        self.user.email_verified = False
+        self.user.save(update_fields=["email_verified"])
+        self.user_admin.make_review_moderators(self.make_request(self.superuser), User.objects.filter(pk=self.user.pk))
+        self.assertFalse(self.user.groups.filter(name=REVIEW_MODERATORS_GROUP_NAME).exists())
