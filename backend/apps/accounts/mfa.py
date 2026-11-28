@@ -16,8 +16,21 @@ from .auth_tokens import issue_user_tokens
 from .mfa_models import AdminMFADevice
 
 
+def policy_digest(user, effective=None):
+    from apps.rbac.privileges import authority
+
+    grants = authority(user) if effective is None else effective
+    return hashlib.sha256("\0".join(sorted(grants)).encode()).hexdigest()
+
+
 def is_privileged(user):
-    return bool(user and (user.is_staff or user.is_superuser))
+    from apps.rbac.privileges import privileged_users
+
+    return bool(user and (user.is_staff or user.is_superuser or privileged_users().filter(pk=user.pk).exists()))
+
+
+def approval_required(user):
+    return not (user.is_superuser and user.operator_provisioned_password and user.has_usable_password())
 
 
 def _cipher():
@@ -88,15 +101,19 @@ def issue_privileged_tokens(user, device):
     if not (device.enabled and is_privileged(user)):
         raise ValueError("MFA enrollment required")
     refresh = issue_user_tokens(user)
+    refresh["policy"] = policy_digest(user)
     refresh["mfa"] = True
     refresh["mfa_version"] = device.session_version
     return refresh
 
 
 def privileged_token_valid(user, token):
-    if not is_privileged(user):
-        return True
+    from apps.rbac.privileges import authority
+
     if not token.get("mfa"):
+        return not is_privileged(user)
+    effective = authority(user)
+    if not effective or token.get("policy") != policy_digest(user, effective):
         return False
     device = AdminMFADevice.objects.filter(user=user, enabled=True).first()
     return bool(device and token.get("mfa_version") == device.session_version)

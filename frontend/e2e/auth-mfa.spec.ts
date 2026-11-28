@@ -69,3 +69,36 @@ test("existing MFA setup accepts a single-use recovery code in the browser flow"
   await page.getByRole("button", { name: "Verify and sign in" }).click();
   await expect(page).toHaveURL(/\/admin\/super/);
 });
+
+test("a promoted OTP-only editor must obtain independent approval before creating a password", async ({ page }) => {
+  let approved = false;
+  const editor = { ...adminUser, is_superuser: false, is_staff: false, capabilities: ["manage_content"] };
+  await installApiMocks(page, {
+    "/api/auth/otp/request/": route => fulfillJson(route, { message: "OTP sent" }),
+    "/api/auth/otp/verify/": route => fulfillJson(route, {
+      mfa_required: true, challenge: "test-customer-attempt", mfa_enrolled: false,
+      approval_reference: "test-reference", establish_password: true,
+    }),
+    "/api/auth/mfa/setup/": route => approved
+      ? fulfillJson(route, { secret: "example-setup-key", otpauth_uri: "otpauth://totp/example" })
+      : fulfillJson(route, { detail: "An administrator must verify your identity and approve this enrollment." }, 403),
+    "/api/auth/mfa/complete/": route => fulfillJson(route, { user: editor, access: "fixture-session", recovery_codes: ["example-recovery-code"] }),
+    "/api/rbac/my-permissions/": route => fulfillJson(route, { user_id: editor.id, permissions: editor.capabilities }),
+  });
+  await page.goto("/auth");
+  await page.getByLabel("Email address").fill("editor@example.test");
+  await page.getByRole("button", { name: "Send code" }).click();
+  await page.getByLabel("Email verification code").fill("123456");
+  await page.getByRole("button", { name: "Verify email" }).click();
+  await expect(page.getByLabel("Enrollment reference")).toHaveText("test-reference");
+  await page.getByLabel("New password").fill("fictional-browser-fixture");
+  await page.getByRole("button", { name: "Set up authenticator" }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("administrator");
+  approved = true;
+  await page.getByRole("button", { name: "Set up authenticator" }).click();
+  await page.getByLabel("Authenticator code").fill("654321");
+  await page.getByRole("button", { name: "Enable MFA and sign in" }).click();
+  await page.getByRole("button", { name: "I saved my recovery codes" }).click();
+  await expect(page).toHaveURL(/\/admin\/content$/);
+  await expect(page.getByRole("link", { name: "Super admin", exact: true })).toHaveCount(0);
+});

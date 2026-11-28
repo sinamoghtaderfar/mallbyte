@@ -21,7 +21,7 @@ from apps.accounts.cookies import (
 )
 
 from .auth_tokens import identity_token_valid, issue_user_tokens
-from .mfa import is_privileged, privileged_token_valid
+from .mfa import approval_required, is_privileged, privileged_token_valid
 from .mfa_models import AdminMFAChallenge
 from .models import OTP, Address, Profile, Seller
 from .otp_delivery import OTPDeliveryError, mask_email, send_otp_email
@@ -41,6 +41,7 @@ from .serializers import (
     SellerApplicationSerializer,
     SellerSerializer,
     SellerUpdateSerializer,
+    SessionUserSerializer,
     UserSerializer,
     VerifiedTokenObtainPairSerializer,
 )
@@ -174,6 +175,8 @@ class OTPVerifyView(generics.GenericAPIView):
         email = serializer.validated_data["email"]
         code = serializer.validated_data["code"]
 
+        # Serialize first-factor consumption with privilege changes for existing accounts.
+        User.objects.all_with_deleted().select_for_update(no_key=True).filter(email=email).first()
         success, message, _otp = OTP.verify_otp_and_get_instance(
             email=email,
             code=code,
@@ -234,13 +237,16 @@ class OTPVerifyView(generics.GenericAPIView):
                 "mfa_required": True,
                 "challenge": token,
                 "mfa_enrolled": bool(enrolled and enrolled.enabled),
+                "establish_password": not user.has_usable_password(),
+                "approval_reference": str(user.mfa_challenges.latest("pk").approval_reference)
+                if not (enrolled and enrolled.enabled) and approval_required(user) else None,
             })
 
         refresh = issue_user_tokens(user)
 
         response = Response(
             {
-                "user": UserSerializer(user).data,
+                "user": SessionUserSerializer(user).data,
                 "access": str(refresh.access_token),
                 "is_new": created,
             },
@@ -543,6 +549,8 @@ class PasswordResetVerifyView(generics.GenericAPIView):
         code = serializer.validated_data["code"]
         new_password = serializer.validated_data["new_password"]
 
+        # Serialize first-factor consumption with privilege changes for existing accounts.
+        User.objects.all_with_deleted().select_for_update(no_key=True).filter(email=email).first()
         success, message, _otp = OTP.verify_otp_and_get_instance(
             email=email,
             code=code,
@@ -569,6 +577,8 @@ class PasswordResetVerifyView(generics.GenericAPIView):
 
         with transaction.atomic():
             user = User.objects.select_for_update().get(pk=user.pk)
+            if is_privileged(user) and not user.has_usable_password():
+                return Response({"detail": "Establish your first password during approved MFA enrollment."}, status=403)
             user.set_password(new_password)
             user.email_verified = True
             user.email_verified_at = user.email_verified_at or timezone.now()
@@ -623,6 +633,8 @@ class DeleteAccountView(generics.GenericAPIView):
 
         user = request.user
 
+        if user.is_superuser:
+            return Response({"detail": "Super Admin accounts require an operator-reviewed decommission."}, status=403)
         user.is_deleted = True
         user.deleted_at = timezone.now()
         user.is_active = False
@@ -668,7 +680,7 @@ class AdminDeleteUserView(generics.GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if user.is_superuser or (user.is_staff and not request.user.is_superuser):
+        if user.is_superuser or (is_privileged(user) and not request.user.is_superuser):
             return Response(
                 {
                     "error": "Cannot delete protected accounts",
@@ -802,11 +814,8 @@ class ThrottledTokenObtainPairView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         email = str(request.data.get("email", "")).strip()
-        if User.objects.filter(email__iexact=email, is_active=True).filter(
-            is_staff=True
-        ).exists() or User.objects.filter(
-            email__iexact=email, is_active=True, is_superuser=True
-        ).exists():
+        candidate = User.objects.filter(email__iexact=email, is_active=True).first()
+        if candidate and is_privileged(candidate):
             return Response(
                 {"detail": "Privileged accounts must use email OTP and authenticator MFA."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -899,5 +908,7 @@ class LogoutView(generics.GenericAPIView):
             },
             status=status.HTTP_200_OK,
         )
+        if request.session.get("verified_admin_device"):
+            request.session.flush()
         clear_refresh_cookie(response)
         return response

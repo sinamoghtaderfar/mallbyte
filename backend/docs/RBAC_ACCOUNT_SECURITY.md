@@ -1,7 +1,7 @@
 # Account management authorization and seller decisions
 
-`is_staff` controls entry to Django admin and the existing privileged-login MFA
-flow. It does not grant business API capabilities. The seller admin endpoints now
+`is_staff` controls entry to Django admin and requires privileged-login MFA. Effective administrative RBAC permissions also require MFA.
+See the [privileged onboarding, session revocation and rollout guide](../../docs/privileged-role-onboarding.md). It does not grant business API capabilities. The seller admin endpoints now
 require `view_sellers`, `approve_seller`, or `reject_seller`; account deletion
 requires `delete_user`. Superusers retain access. A delegated account deleter
 cannot delete staff accounts, superusers, or itself.
@@ -35,10 +35,9 @@ the intended existing vendor role/permissions rather than approve a partially
 configured seller. Repeated or competing decisions cannot overwrite a completed
 application. Rejection requires a nonblank reason of 3–2000 characters.
 
-Django review moderator actions preserve superuser status and do not reactivate
-suspended accounts. Removing the moderator group also clears staff access when
-no other Django admin permission remains. Existing independent admin permissions
-preserve staff access. System role permission changes are consistently denied by
+Django review moderator actions require an active, email-verified target.
+Adding or removing the moderator group preserves Django staff and superuser
+flags and other independent permissions. System role permission changes are consistently denied by
 both role-management APIs; seeded system policy is changed through reviewed
 migrations. Custom roles remain editable by superusers.
 

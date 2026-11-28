@@ -1,11 +1,21 @@
 from django.contrib.auth import get_user_model
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 User = get_user_model()
 
 
-class Role(models.Model):
+class PolicyModel(models.Model):
+    """The policy write and security epoch update must commit together."""
+    class Meta:
+        abstract = True
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        return super().save(*args, **kwargs)
+
+
+class Role(PolicyModel):
     """A named collection of business permissions."""
 
     name = models.CharField(max_length=255, unique=True)
@@ -35,7 +45,7 @@ class Role(models.Model):
         return self.name
 
 
-class Permission(models.Model):
+class Permission(PolicyModel):
     """A business action that can be granted to roles."""
 
     name = models.CharField(
@@ -81,7 +91,7 @@ class Permission(models.Model):
         return f"{self.module}.{self.codename}"
 
 
-class RolePermission(models.Model):
+class RolePermission(PolicyModel):
     """Link between a role and a permission."""
 
     role = models.ForeignKey(
@@ -105,7 +115,7 @@ class RolePermission(models.Model):
         return f"{self.role.name} -> {self.permission.codename}"
 
 
-class UserRole(models.Model):
+class UserRole(PolicyModel):
     """Role assignment with activation and expiration."""
 
     user = models.ForeignKey(
@@ -144,6 +154,12 @@ class UserRole(models.Model):
     def __str__(self):
         identifier = self.user.email or self.user.full_name or str(self.user_id)
         return f"{identifier} -> {self.role.name}"
+
+    def clean(self):
+        super().clean()
+        if self.user_id and self.role_id and self.is_active and not self.is_expired:
+            from .privileges import validate_assignment
+            validate_assignment(self.user, self.role)
 
     @property
     def is_expired(self):

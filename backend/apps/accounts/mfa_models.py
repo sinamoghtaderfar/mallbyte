@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
@@ -70,6 +71,13 @@ class AdminMFAChallenge(models.Model):
     used_at = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     password_confirmed = models.BooleanField(default=False)
+    approval_reference = models.UUIDField(default=uuid.uuid4, db_index=True, editable=False)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
+    pending_password = models.CharField(max_length=128, blank=True)
+    policy_digest = models.CharField(max_length=64, blank=True)
+    session_expires_at = models.DateTimeField(null=True, editable=False)
+    issued_auth_version = models.PositiveIntegerField(null=True, editable=False)
+    issued_device_version = models.CharField(max_length=64, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @classmethod
@@ -77,10 +85,21 @@ class AdminMFAChallenge(models.Model):
         # The full opaque value is hashed below. Binding its prefix to the
         # security epoch invalidates pending first factors after session
         # revocation without changing the database schema.
+        from .mfa import policy_digest
         token = f"{user.auth_version}.{secrets.token_urlsafe(32)}"
         cls.objects.create(
             user=user,
+            policy_digest=policy_digest(user),
+            issued_auth_version=user.auth_version,
             token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
             expires_at=timezone.now() + timedelta(minutes=5),
         )
         return token
+
+
+class SecurityNotice(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    recipient = models.EmailField()
+    event = models.CharField(max_length=160)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, db_index=True)

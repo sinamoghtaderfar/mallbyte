@@ -210,10 +210,8 @@ class UserAdmin(SuperuserMutationAdminMixin, DjangoUserAdmin):
 
         with transaction.atomic():
             for user in queryset.select_for_update():
-                if user.is_superuser or not user.is_active:
+                if user.is_superuser or not user.is_active or not user.email_verified:
                     continue
-                user.is_staff = True
-                user.save(update_fields=["is_staff"])
                 user.groups.add(group)
                 updated_count += 1
 
@@ -239,9 +237,6 @@ class UserAdmin(SuperuserMutationAdminMixin, DjangoUserAdmin):
         with transaction.atomic():
             for user in queryset.select_for_update():
                 user.groups.remove(group)
-                if not user.is_superuser and not user.groups.filter(permissions__isnull=False).exists() and not user.user_permissions.exists():
-                    user.is_staff = False
-                    user.save(update_fields=["is_staff"])
                 updated_count += 1
 
         self.message_user(

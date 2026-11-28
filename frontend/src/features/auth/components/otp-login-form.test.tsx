@@ -92,6 +92,18 @@ describe("OtpLoginForm privileged MFA", () => {
     );
   });
 
+  it("explains independent approval and allows an OTP-only user to set a first password", async () => {
+    vi.mocked(verifyOtp).mockResolvedValue({
+      mfa_required: true, challenge: "scoped", mfa_enrolled: false, establish_password: true,
+      approval_reference: "reference-from-first-factor",
+    });
+    await reachEmailCode();
+    expect(await screen.findByLabelText("New password")).toHaveAttribute("autocomplete", "new-password");
+    expect(screen.getByLabelText("Enrollment reference")).toHaveTextContent("reference-from-first-factor");
+    expect(screen.getByText(/known phone number/i)).toBeVisible();
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
   it("keeps regular customer login unchanged", async () => {
     const customer = { ...user, is_staff: false, is_superuser: false };
     vi.mocked(verifyOtp).mockResolvedValue({ user: customer, access: "regular", is_new: false });

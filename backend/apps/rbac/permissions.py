@@ -83,6 +83,12 @@ class IsProductAdmin(permissions.BasePermission):
         )
 
 
+class CanManageCategories(IsProductAdmin):
+    def has_permission(self, request, view):
+        from .utils import has_permission
+        return super().has_permission(request, view) or has_permission(request.user, "manage_categories")
+
+
 class IsVendor(permissions.BasePermission):
     """Check if user is a verified vendor."""
 

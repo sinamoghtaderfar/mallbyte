@@ -1,10 +1,13 @@
 from django.contrib.auth import get_user_model
-from rest_framework import generics, status, viewsets
+from django.core.exceptions import ValidationError as ModelValidationError
+from django.db import transaction
+from rest_framework import serializers, generics, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .models import AdminLog, Permission, Role, RolePermission, UserRole
 from .permissions import IsSuperAdmin
+from .privileges import role_requires_mfa, validate_assignment
 from .serializers import (
     AdminLogFilterSerializer,
     AdminLogSerializer,
@@ -197,6 +200,31 @@ class UserRoleViewSet(viewsets.ModelViewSet):
     serializer_class = UserRoleSerializer
     permission_classes = [IsSuperAdmin]
 
+    @transaction.atomic
+    def perform_create(self, serializer):
+        self._save_assignment(serializer)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        self._save_assignment(serializer)
+
+    def _save_assignment(self, serializer):
+        role = serializer.validated_data.get("role") or serializer.instance.role
+        user = serializer.validated_data.get("user") or serializer.instance.user
+        role = Role.objects.select_for_update().get(pk=role.pk)
+        user = User.objects.select_for_update(no_key=True).get(pk=user.pk)
+        if serializer.validated_data.get("is_active", getattr(serializer.instance, "is_active", True)):
+            validate_target(user, role)
+        assignment = serializer.save(assigned_by=self.request.user)
+        log_admin_action(self.request.user, "assign_role" if assignment.is_active else "remove_role",
+                         target_user=user, target_role=role, request=self.request)
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        log_admin_action(self.request.user, "remove_role", target_user=instance.user,
+                         target_role=instance.role, request=self.request)
+        instance.delete()
+
     def get_queryset(self):
         queryset = UserRole.objects.select_related(
             "user",
@@ -209,20 +237,29 @@ class UserRoleViewSet(viewsets.ModelViewSet):
         return queryset.filter(**filters.validated_data)
 
 
+def validate_target(user, role):
+    try:
+        validate_assignment(user, role)
+    except ModelValidationError as exc:
+        raise serializers.ValidationError({"user_id": exc.messages}) from exc
+
+
 class AssignRoleView(generics.GenericAPIView):
     """Assign one role to one user."""
 
     permission_classes = [IsSuperAdmin]
     serializer_class = AssignRoleSerializer
 
+    @transaction.atomic
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = User.objects.get(id=serializer.validated_data["user_id"])
-        role = Role.objects.get(id=serializer.validated_data["role_id"])
+        role = Role.objects.select_for_update().get(id=serializer.validated_data["role_id"])
+        user = User.objects.select_for_update(no_key=True).get(id=serializer.validated_data["user_id"])
         expires_at = serializer.validated_data.get("expires_at")
 
+        validate_target(user, role)
         user_role = assign_role(
             user=user,
             role=role,
@@ -254,10 +291,11 @@ class RemoveRoleView(generics.GenericAPIView):
 
     permission_classes = [IsSuperAdmin]
 
+    @transaction.atomic
     def delete(self, request, user_id, role_id):
         try:
-            user = User.objects.get(id=user_id)
-            role = Role.objects.get(id=role_id)
+            role = Role.objects.select_for_update().get(id=role_id)
+            user = User.objects.select_for_update(no_key=True).get(id=user_id)
 
         except (User.DoesNotExist, Role.DoesNotExist):
             return Response(
@@ -404,6 +442,7 @@ class BulkAssignRolesView(generics.GenericAPIView):
     permission_classes = [IsSuperAdmin]
     serializer_class = BulkAssignRoleSerializer
 
+    @transaction.atomic
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -412,68 +451,57 @@ class BulkAssignRolesView(generics.GenericAPIView):
         role_ids = serializer.validated_data["role_ids"]
         expires_at = serializer.validated_data.get("expires_at")
 
-        users = User.objects.filter(id__in=user_ids)
-        roles = Role.objects.filter(id__in=role_ids)
+        roles = list(Role.objects.select_for_update().filter(id__in=role_ids).order_by("pk"))
+        users = list(User.objects.select_for_update(no_key=True).filter(id__in=user_ids).order_by("pk"))
 
         results = []
-        errors = []
+        if any(role_requires_mfa(role) for role in roles) and any(not (user.is_active and user.email_verified) for user in users):
+            raise serializers.ValidationError({"user_ids": "Privileged roles require active, email-verified users."})
 
         for user in users:
             for role in roles:
-                try:
-                    user_role = assign_role(
-                        user=user,
-                        role=role,
-                        assigned_by=request.user,
-                        expires_at=expires_at,
-                    )
+                user_role = assign_role(
+                    user=user,
+                    role=role,
+                    assigned_by=request.user,
+                    expires_at=expires_at,
+                )
 
-                    results.append(
-                        {
-                            "user_id": user.id,
-                            "user_email": user.email,
-                            "role_id": role.id,
-                            "role_name": role.name,
-                            "user_role_id": user_role.id,
-                            "assigned_at": user_role.assigned_at,
-                        }
-                    )
+                results.append(
+                    {
+                        "user_id": user.id,
+                        "user_email": user.email,
+                        "role_id": role.id,
+                        "role_name": role.name,
+                        "user_role_id": user_role.id,
+                        "assigned_at": user_role.assigned_at,
+                    }
+                )
 
-                    log_admin_action(
-                        admin=request.user,
-                        action="assign_role",
-                        target_user=user,
-                        target_role=role,
-                        details={
-                            "role_name": role.name,
-                            "expires_at": str(expires_at) if expires_at else None,
-                            "bulk": True,
-                        },
-                        request=request,
-                    )
-
-                except Exception as exc:
-                    errors.append(
-                        {
-                            "user_id": user.id,
-                            "user_email": user.email,
-                            "role_id": role.id,
-                            "role_name": role.name,
-                            "error": str(exc),
-                        }
-                    )
+                log_admin_action(
+                    admin=request.user,
+                    action="assign_role",
+                    target_user=user,
+                    target_role=role,
+                    details={
+                        "role_name": role.name,
+                        "expires_at": str(expires_at) if expires_at else None,
+                        "bulk": True,
+                    },
+                    request=request,
+                )
 
         return Response(
             {
-                "success": len(errors) == 0,
+                "success": True,
                 "assigned": results,
-                "errors": errors,
+                "errors": [],
                 "summary": {
-                    "total_users": users.count(),
-                    "total_roles": roles.count(),
+                    "total_users": len(users),
+                    "total_roles": len(roles),
                     "total_assignments": len(results),
-                    "total_errors": len(errors),
+                    "total_errors": 0,
                 },
             },
-            status=status.HTTP_201_CREATED if not errors else status.HTTP_207_MULTI_STATUS,
+            status=status.HTTP_201_CREATED,
         )

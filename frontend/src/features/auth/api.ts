@@ -83,7 +83,9 @@ export async function finishAdminMfa(
   const endpoint = enrollment
     ? API_ENDPOINTS.auth.mfaComplete
     : API_ENDPOINTS.auth.mfaVerify;
-  const response = await apiClient.post<AuthSuccessResponse>(endpoint, payload);
+  // Enrollment hashes ten recovery codes. Checking a recovery code can also
+  // require ten password-hash comparisons on a resource-limited server.
+  const response = await apiClient.post<AuthSuccessResponse>(endpoint, payload, { timeout: 60_000 });
   assertCurrentSession(generation);
   establishSession(response.data.access, generation);
   useAuthStore.getState().setSessionIssue(null);

@@ -4,6 +4,7 @@ export type AuthUser = {
   phone: string | null;
   full_name: string;
   is_seller: boolean;
+  capabilities?: string[];
   is_staff?: boolean;
   is_superuser?: boolean;
   email_verified: boolean;
@@ -36,6 +37,8 @@ export type OtpMfaChallengeResponse = {
   mfa_required: true;
   challenge: string;
   mfa_enrolled: boolean;
+  establish_password?: boolean;
+  approval_reference?: string | null;
 };
 
 export type OtpVerifyResponse = AuthSuccessResponse | OtpMfaChallengeResponse;
@@ -43,6 +46,7 @@ export type OtpVerifyResponse = AuthSuccessResponse | OtpMfaChallengeResponse;
 export type MFASetupResponse = {
   secret: string;
   otpauth_uri: string;
+  qr_png?: string;
   message: string;
 };
 

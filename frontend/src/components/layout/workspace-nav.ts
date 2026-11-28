@@ -35,6 +35,8 @@ export const ADMIN_NAV: WorkspaceGroup[] = [
     { href: "/admin/inventory", label: "Inventory", icon: Boxes },
     { href: "/warehouse/transfers", label: "Stock transfers", icon: Warehouse },
     { href: "/admin/sellers", label: "Sellers", icon: HeartHandshake },
+    { href: "/admin/categories", label: "Product categories", icon: Package },
+    { href: "/support", label: "Support", icon: HeartHandshake },
   ] },
   { label: "Finance", links: [
     { href: "/admin/financial", label: "Financial overview", icon: CircleDollarSign },

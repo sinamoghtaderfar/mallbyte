@@ -21,6 +21,7 @@ from apps.accounts.serializers import (
     PasswordResetVerifySerializer,
     RegisterSerializer,
     SellerSerializer,
+    SessionUserSerializer,
     UserSerializer,
 )
 from apps.rbac.serializers import AssignRoleSerializer, BulkAssignRoleSerializer, CheckPermissionSerializer, PermissionSerializer, RoleSerializer, UserPermissionsSerializer, UserRoleSerializer
@@ -72,7 +73,7 @@ class EmailPasswordInput(serializers.Serializer):
 
 
 class AuthenticatedUserResponse(AccessTokenResponse):
-    user = UserSerializer()
+    user = SessionUserSerializer()
     is_new = serializers.BooleanField()
 
 
@@ -84,11 +85,14 @@ class MFAChallengeResponse(serializers.Serializer):
     mfa_required = serializers.BooleanField()
     challenge = serializers.CharField()
     mfa_enrolled = serializers.BooleanField()
+    approval_reference = serializers.UUIDField(allow_null=True)
+    establish_password = serializers.BooleanField()
 
 
 class MFASetupResponse(MessageResponse):
     secret = serializers.CharField()
     otpauth_uri = serializers.CharField()
+    qr_png = serializers.CharField()
 
 
 class RegistrationResponse(MessageResponse):
@@ -133,8 +137,8 @@ _document_view("apps.accounts.views.OTPVerifyView", post=extend_schema(
     description="Ordinary accounts receive an access JWT and an HttpOnly refresh cookie. Privileged accounts receive only a short-lived MFA challenge.",
 ))
 _document_view("apps.accounts.mfa_views.AdminMFASetupView", post=extend_schema(
-    request=SetupInput, responses={200: MFASetupResponse, 400: DetailErrorResponse, 409: DetailErrorResponse},
-    description="Confirm the privileged account password and provision an authenticator using the first-factor challenge.",
+    request=SetupInput, responses={200: MFASetupResponse, 400: DetailErrorResponse, 403: DetailErrorResponse, 409: DetailErrorResponse},
+    description="Establish or confirm a password for the approved first-factor challenge and provision a local authenticator.",
 ))
 _document_view("apps.accounts.mfa_views.AdminMFACompleteView", post=extend_schema(
     request=VerifyInput, responses={200: MFAEnrollmentResponse, 400: DetailErrorResponse},

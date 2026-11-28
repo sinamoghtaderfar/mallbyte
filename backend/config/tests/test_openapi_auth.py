@@ -69,7 +69,12 @@ class AuthenticationOpenAPIContractTests(SimpleTestCase):
         verification = self.response("/api/auth/otp/verify/")
         variants = [self.component(item) for item in verification["oneOf"]]
         self.assertTrue(any("access" in variant["properties"] for variant in variants))
-        self.assertTrue(any(set(variant["properties"]) == {"mfa_required", "challenge", "mfa_enrolled"} for variant in variants))
+        challenge = next(variant for variant in variants if "mfa_required" in variant["properties"])
+        self.assertEqual(set(challenge["properties"]), {
+            "mfa_required", "challenge", "mfa_enrolled", "establish_password", "approval_reference",
+        })
+        self.assertTrue(challenge["properties"]["approval_reference"]["nullable"])
+        self.assertEqual(challenge["properties"]["establish_password"]["type"], "boolean")
 
     def test_computed_collections_are_typed_as_arrays_and_counts_as_integers(self):
         components = self.schema["components"]["schemas"]

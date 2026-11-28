@@ -1,5 +1,6 @@
 "use client";
 
+import { getApiErrorMessage } from "@/lib/api/errors";
 import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
@@ -32,7 +33,7 @@ type Overview = {
 };
 type User = {
   id: number; email: string; full_name: string; phone: string | null; is_active: boolean; is_staff: boolean;
-  is_superuser: boolean; is_seller: boolean; email_verified: boolean; date_joined: string; roles: { id: number; name: string }[];
+  mfa_status?: string; is_superuser: boolean; is_seller: boolean; email_verified: boolean; date_joined: string; roles: { id: number; name: string }[];
 };
 type Permission = { id: number; name: string; codename: string; module: string };
 type Role = {
@@ -41,6 +42,8 @@ type Role = {
 };
 type Tab = "overview" | "users" | "roles" | "products" | "audit" | "settings";
 type PendingAction =
+  | { kind: "assign"; userId: number; role: Role }
+  | { kind: "approve"; user: User }
   | { kind: "status"; user: User }
   | { kind: "remove-role"; user: User; role: { id: number; name: string } };
 
@@ -70,13 +73,6 @@ const integrations = [
   { href: "/admin/inventory", title: "Inventory", desc: "Stock and warehouse operations", Icon: Boxes },
 ];
 
-function message(error: unknown) {
-  if (typeof error === "object" && error !== null && "response" in error) {
-    const response = (error as { response?: { data?: { detail?: string; error?: string } } }).response;
-    return response?.data?.detail || response?.data?.error || "Request failed.";
-  }
-  return error instanceof Error ? error.message : "Request failed.";
-}
 function unwrap<T>(data: T[] | Paginated<T>): T[] { return Array.isArray(data) ? data : data.results; }
 function fmt(value: number) { return new Intl.NumberFormat("en-US").format(value); }
 function accountType(user: User) {
@@ -131,14 +127,14 @@ export function SuperAdminConsole() {
       audit: async () => {},
       settings: async () => {},
     };
-    void calls[tab]().catch((e) => { if (active) setError(message(e)); }).finally(() => { if (active) setBusy(false); });
+    void calls[tab]().catch((e) => { if (active) setError(getApiErrorMessage(e)); }).finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
   }, [bootstrapped, allowed, tab, version, userPage, userQuery]);
 
   async function run(fn: () => Promise<unknown>, success: string) {
     setBusy(true); setError(""); setNotice("");
     try { await fn(); setNotice(success); refresh(); return true; }
-    catch (e) { setError(message(e)); return false; }
+    catch (e) { setError(getApiErrorMessage(e)); return false; }
     finally { setBusy(false); }
   }
 
@@ -177,6 +173,8 @@ export function SuperAdminConsole() {
       search={userSearch} onSearchChange={setUserSearch}
       onSearch={(event) => { event.preventDefault(); setUserPage(1); setUserQuery(userSearch); }}
       onPage={(next) => setUserPage(next)}
+      onAssign={(target) => { setAssignedUser(String(target.id)); selectTab("roles"); }}
+      onApprove={(target) => setPending({ kind: "approve", user: target })}
       onManage={(target) => setPending({ kind: "status", user: target })}
       onRemoveRole={(target, role) => setPending({ kind: "remove-role", user: target, role })} />}
 
@@ -203,8 +201,8 @@ export function SuperAdminConsole() {
           <CardHeader title="Assign role" description="Use a user ID from the Users section. Permissions are checked by the API." />
           <form className="mt-5 grid gap-4" onSubmit={(e) => {
             e.preventDefault();
-            void run(() => apiClient.post(`${base}/assign-role/`, { user_id: Number(assignedUser), role_id: Number(assignedRole) }), "Role assigned.");
-            setAssignedUser("");
+            const role = roles.find(r => r.id === Number(assignedRole));
+            if (role) setPending({ kind: "assign", userId: Number(assignedUser), role });
           }}>
             <Field label="User ID" htmlFor="sa-assign-user" required>
               <Input id="sa-assign-user" required min={1} type="number" inputMode="numeric" placeholder="User ID" value={assignedUser} onChange={(e) => setAssignedUser(e.target.value)} />
@@ -273,6 +271,17 @@ export function SuperAdminConsole() {
       <WorkspaceLinks />
     </section>}
 
+    {pending?.kind === "assign" && <ConfirmDialog title={`Assign ${pending.role.name} to user #${pending.userId}?`}
+      description="Granting privileged permissions revokes existing sessions. The user must sign in again and complete approved enrollment and MFA before administrative access becomes available."
+      confirmLabel="Confirm assignment" busy={busy} onCancel={() => setPending(null)}
+      onConfirm={() => { void run(() => apiClient.post(`${base}/assign-role/`, { user_id: pending.userId, role_id: pending.role.id }), "Role assigned and audited.")
+        .then(ok => { if (ok) setAssignedUser(""); setPending(null); }); }} />}
+    {pending?.kind === "approve" && <ConfirmDialog title={`Approve enrollment for ${pending.user.email}?`}
+      description="Verify the person's identity in person or by calling a previously established number. Ask for the enrollment reference shown on their screen. Email alone is insufficient."
+      reasonLabel="Independently verified enrollment reference" reasonMinLength={36}
+      confirmLabel="Approve verified enrollment" busy={busy} onCancel={() => setPending(null)}
+      onConfirm={(reference) => { void run(() => apiClient.post(`${base}/console/users/${pending.user.id}/approve-enrollment/`, { reference: reference.trim(), identity_verified: true }), "Enrollment approved. The user can now set up an authenticator.")
+        .then(() => setPending(null)); }} />}
     {pending?.kind === "status" && <ConfirmDialog
       title={`${pending.user.is_active ? "Suspend" : "Activate"} ${pending.user.email}?`}
       description="This action is recorded in the audit log. Privileged accounts cannot be changed here."
@@ -371,10 +380,10 @@ function WorkspaceLinks() {
   </div>;
 }
 
-function UsersPanel({ users, loaded, count, page, busy, currentUserId, search, onSearchChange, onSearch, onPage, onManage, onRemoveRole }: {
+function UsersPanel({ users, loaded, count, page, busy, currentUserId, search, onSearchChange, onSearch, onPage, onAssign, onApprove, onManage, onRemoveRole }: {
   users: User[]; loaded: boolean; count: number; page: number; busy: boolean; currentUserId?: number;
   search: string; onSearchChange: (value: string) => void; onSearch: (event: FormEvent<HTMLFormElement>) => void;
-  onPage: (page: number) => void; onManage: (user: User) => void; onRemoveRole: (user: User, role: { id: number; name: string }) => void;
+  onAssign: (user: User) => void; onApprove: (user: User) => void; onPage: (page: number) => void; onManage: (user: User) => void; onRemoveRole: (user: User, role: { id: number; name: string }) => void;
 }) {
   return <section aria-labelledby="users-heading" className="grid gap-4">
     <h2 id="users-heading" className="sr-only">Users</h2>
@@ -421,11 +430,16 @@ function UsersPanel({ users, loaded, count, page, busy, currentUserId, search, o
                 <td>
                   <div className="flex flex-col items-start gap-1">
                     <StatusBadge status={item.is_active ? "active" : "suspended"} label={item.is_active ? "Active" : "Suspended"} />
-                    {!item.email_verified && <span className="text-xs text-muted">Email unverified</span>}
+                    <span className="text-xs text-muted">{item.email_verified ? "Email verified" : "Email unverified"}</span>
+                    <span className="text-xs text-muted">{item.mfa_status}</span>
+                    {item.mfa_status === "Enrollment pending" && item.email_verified && item.id !== currentUserId && item.is_active &&
+                      <Button size="small" variant="secondary" onClick={() => onApprove(item)}>Approve enrollment</Button>}
                   </div>
                 </td>
                 <td className="whitespace-nowrap text-muted" data-numeric>{item.date_joined ? new Date(item.date_joined).toLocaleDateString() : "—"}</td>
                 <td className="text-right">
+                  {item.is_active && item.email_verified && !item.is_superuser && <Button size="small" variant="secondary"
+                    onClick={() => onAssign(item)} aria-label={`Assign role to ${item.email}`}>Assign role</Button>}
                   {locked
                     ? <span className="inline-flex items-center gap-1 text-xs text-muted" title="Privileged or own accounts cannot be changed here"><Lock size={13} aria-hidden="true" />Protected</span>
                     : <Button size="small" variant="secondary" onClick={() => onManage(item)} aria-label={`Manage ${item.email}`}><UserCog size={15} aria-hidden="true" />Manage</Button>}
