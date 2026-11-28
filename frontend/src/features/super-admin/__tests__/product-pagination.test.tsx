@@ -209,6 +209,23 @@ describe("super-admin product collection", () => {
     await screen.findByText("user21@example.test");
     expect(screen.getByText("1 users • Page 1")).toBeInTheDocument();
   });
+  it("refreshes session status when an administrator repeats the same user search", async () => {
+    const normal = handler;
+    let status = "Enrollment pending";
+    handler = (url, config) => url.endsWith("/users/")
+      ? Promise.resolve(response(page([{ ...users[0], mfa_status: status }], 1)))
+      : normal(url, config);
+    const operator = await open("Users");
+    await screen.findByText("Enrollment pending");
+    status = "Authenticator enrolled · Privileged session active";
+    await operator.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText(status);
+    status = "Authenticator enrolled";
+    await operator.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText(status);
+    expect(screen.queryByText(/session active/)).not.toBeInTheDocument();
+  });
+
   it("ignores an older product query even when transport ignores abort", async () => {
     const pending = deferred<AxiosResponse>();
     const normal = handler;

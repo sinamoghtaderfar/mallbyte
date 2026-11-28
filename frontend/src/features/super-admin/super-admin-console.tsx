@@ -171,7 +171,12 @@ export function SuperAdminConsole() {
     {tab === "users" && <UsersPanel
       users={users} loaded={usersLoaded} count={userCount} page={userPage} busy={busy} currentUserId={user?.id}
       search={userSearch} onSearchChange={setUserSearch}
-      onSearch={(event) => { event.preventDefault(); setUserPage(1); setUserQuery(userSearch); }}
+      onSearch={(event) => {
+        event.preventDefault();
+        setUserPage(1);
+        setUserQuery(userSearch);
+        refresh();
+      }}
       onPage={(next) => setUserPage(next)}
       onAssign={(target) => { setAssignedUser(String(target.id)); selectTab("roles"); }}
       onApprove={(target) => setPending({ kind: "approve", user: target })}
